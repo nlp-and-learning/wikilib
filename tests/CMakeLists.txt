@@ -8,12 +8,14 @@ add_executable(wikilib_tests
     core/test_text_utils.cpp
     core/test_unicode_utils.cpp
     core/test_string_pool.cpp
+    core/test_line_reader.cpp
     markup/test_tokenizer.cpp
     markup/test_tokenizer_utils.cpp
     markup/test_parser.cpp
     markup/test_ast.cpp
     markup/test_heading.cpp
     markup/test_section_tree.cpp
+    dump/test_index_chunker.cpp
     templates/test_template_parser.cpp
     templates/test_complex_templates.cpp
 )

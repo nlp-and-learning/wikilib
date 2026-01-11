@@ -44,7 +44,8 @@ target_sources(wikilib PRIVATE
     src/core/text_utils.cpp
     src/core/unicode_utils.cpp
     src/core/string_pool.cpp
-    
+    src/core/line_reader.cpp
+
     # MediaWiki markup parsing
     src/markup/tokenizer.cpp
     src/markup/parser.cpp
@@ -52,18 +53,20 @@ target_sources(wikilib PRIVATE
     src/markup/heading.cpp
     src/markup/section_tree.cpp
     src/markup/wikitext_visitor.cpp
-    
+
     # Template handling
     src/templates/template_parser.cpp
     src/templates/template_expander.cpp
     #src/templates/parameter_parser.cpp
-    
+
     # Dump processing
     src/dump/xml_reader.cpp
     src/dump/bz2_stream.cpp
+    src/dump/bz2_line_reader.cpp
     src/dump/page_handler.cpp
     src/dump/index_parser.cpp
-    
+    src/dump/index_chunker.cpp
+
     # Output formats
     src/output/plain_text.cpp
     src/output/json_writer.cpp
