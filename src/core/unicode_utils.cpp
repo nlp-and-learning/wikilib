@@ -142,7 +142,7 @@ std::string encode_utf8(char32_t codepoint) {
 // ============================================================================
 
 std::string to_lower(std::string_view str) {
-    icu::UnicodeString ustr = icu::UnicodeString::fromUTF8(icu::StringPiece(str.data(), str.size()));
+    icu::UnicodeString ustr = icu::UnicodeString::fromUTF8(icu::StringPiece(str.data(), static_cast<int32_t>(str.size())));
     ustr.toLower();
 
     std::string result;
@@ -151,7 +151,7 @@ std::string to_lower(std::string_view str) {
 }
 
 std::string to_upper(std::string_view str) {
-    icu::UnicodeString ustr = icu::UnicodeString::fromUTF8(icu::StringPiece(str.data(), str.size()));
+    icu::UnicodeString ustr = icu::UnicodeString::fromUTF8(icu::StringPiece(str.data(), static_cast<int32_t>(str.size())));
     ustr.toUpper();
 
     std::string result;
@@ -160,7 +160,7 @@ std::string to_upper(std::string_view str) {
 }
 
 std::string to_title_case(std::string_view str) {
-    icu::UnicodeString ustr = icu::UnicodeString::fromUTF8(icu::StringPiece(str.data(), str.size()));
+    icu::UnicodeString ustr = icu::UnicodeString::fromUTF8(icu::StringPiece(str.data(), static_cast<int32_t>(str.size())));
     ustr.toTitle(nullptr);
 
     std::string result;
@@ -172,14 +172,15 @@ std::string capitalize_first(std::string_view str) {
     if (str.empty())
         return {};
 
-    icu::UnicodeString ustr = icu::UnicodeString::fromUTF8(icu::StringPiece(str.data(), str.size()));
+    icu::UnicodeString ustr = icu::UnicodeString::fromUTF8(icu::StringPiece(str.data(), static_cast<int32_t>(str.size())));
 
     if (ustr.length() > 0) {
         UChar32 first = ustr.char32At(0);
         UChar32 upper = u_toupper(first);
 
         if (first != upper) {
-            ustr.setCharAt(0, upper);
+            // Replace the first character with its uppercase version
+            ustr.replace(0, 1, upper);
         }
     }
 
@@ -216,7 +217,7 @@ std::string normalize(std::string_view str, NormalizationForm form) {
         return std::string(str); // Return unchanged on error
     }
 
-    icu::UnicodeString ustr = icu::UnicodeString::fromUTF8(icu::StringPiece(str.data(), str.size()));
+    icu::UnicodeString ustr = icu::UnicodeString::fromUTF8(icu::StringPiece(str.data(), static_cast<int32_t>(str.size())));
     icu::UnicodeString normalized = normalizer->normalize(ustr, status);
 
     if (U_FAILURE(status)) {
@@ -233,23 +234,23 @@ std::string normalize(std::string_view str, NormalizationForm form) {
 // ============================================================================
 
 bool is_whitespace(char32_t cp) noexcept {
-    return u_isUWhiteSpace(cp);
+    return u_isUWhiteSpace(static_cast<UChar32>(cp));
 }
 
 bool is_letter(char32_t cp) noexcept {
-    return u_isalpha(cp);
+    return u_isalpha(static_cast<UChar32>(cp));
 }
 
 bool is_digit(char32_t cp) noexcept {
-    return u_isdigit(cp);
+    return u_isdigit(static_cast<UChar32>(cp));
 }
 
 bool is_alphanumeric(char32_t cp) noexcept {
-    return u_isalnum(cp);
+    return u_isalnum(static_cast<UChar32>(cp));
 }
 
 bool is_punctuation(char32_t cp) noexcept {
-    return u_ispunct(cp);
+    return u_ispunct(static_cast<UChar32>(cp));
 }
 
 // ============================================================================
@@ -288,13 +289,14 @@ std::string normalize_for_comparison(std::string_view str) {
     if (str.empty())
         return {};
 
-    icu::UnicodeString ustr = icu::UnicodeString::fromUTF8(icu::StringPiece(str.data(), str.size()));
+    icu::UnicodeString ustr = icu::UnicodeString::fromUTF8(icu::StringPiece(str.data(), static_cast<int32_t>(str.size())));
 
     if (ustr.length() > 0) {
         UChar32 first = ustr.char32At(0);
         UChar32 lower = u_tolower(first);
         if (first != lower) {
-            ustr.setCharAt(0, lower);
+            // Replace the first character with its lowercase version
+            ustr.replace(0, 1, lower);
         }
     }
 
@@ -306,13 +308,13 @@ std::string normalize_for_comparison(std::string_view str) {
 std::string title_to_url(std::string_view title) {
     std::ostringstream result;
 
-    for (size_t i = 0; i < title.size(); ++i) {
-        unsigned char c = title[i];
+    for (char ch : title) {
+        auto c = static_cast<unsigned char>(ch);
 
         if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' ||
             c == '.' || c == '~') {
             // Safe characters
-            result << c;
+            result << ch;
         } else if (c == ' ') {
             // Space becomes underscore
             result << '_';
