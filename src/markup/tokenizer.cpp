@@ -270,6 +270,14 @@ Token Tokenizer::scan_token() {
 
     at_line_start_ = false;
 
+    // Heading close: = in middle of line (for closing headings)
+    // Scan = as heading if:
+    // - We have at least one =
+    // - We're not inside templates (where = is parameter separator)
+    if (c == '=' && template_depth_ == 0) {
+        return scan_heading();
+    }
+
     // Apostrophes for formatting
     if (c == '\'') {
         return scan_formatting();

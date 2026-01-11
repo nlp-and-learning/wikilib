@@ -372,13 +372,21 @@ NodePtr Parser::parse_paragraph() {
 
 NodePtr Parser::parse_heading() {
     auto heading = std::make_unique<HeadingNode>();
-    const Token &tok = current();
-    heading->level = tok.level;
-    heading->location.begin = tok.location.begin;
+    const Token &opening_tok = current();
+    int opening_level = opening_tok.level;
+    heading->location.begin = opening_tok.location.begin;
+
+    // Headings must start at column 1 (beginning of line)
+    if (opening_tok.location.begin.column != 1) {
+        // Not at line start - treat as text
+        auto text = std::make_unique<TextNode>(std::string(opening_tok.text));
+        advance();
+        return text;
+    }
 
     advance(); // skip opening ==
 
-    // Parse content until matching closing ==
+    // Parse content until closing == or newline
     while (!at_end() && !check(TokenType::Heading) && !check(TokenType::Newline)) {
         auto node = parse_node();
         if (node) {
@@ -388,10 +396,92 @@ NodePtr Parser::parse_heading() {
         }
     }
 
-    // Skip closing == if present
+    // Check for closing == and validate trailing content
+    int closing_level = 0;
+    bool valid_heading = false;
+
     if (check(TokenType::Heading)) {
+        closing_level = current().level;
         heading->location.end = current().location.end;
-        advance();
+        advance(); // skip closing ==
+
+        // After closing ==, only whitespace is allowed until newline
+        valid_heading = true;
+        while (!at_end() && !check(TokenType::Newline)) {
+            const Token &next = current();
+            // Only whitespace/spaces are allowed after closing ==
+            if (next.type == TokenType::Text || next.type == TokenType::Whitespace) {
+                std::string_view text = next.text;
+                // Check if it's only whitespace
+                bool only_whitespace = true;
+                for (char c : text) {
+                    if (c != ' ' && c != '\t') {
+                        only_whitespace = false;
+                        break;
+                    }
+                }
+                if (!only_whitespace) {
+                    // Non-whitespace text after closing == means invalid heading
+                    valid_heading = false;
+                    break;
+                }
+                advance();
+            } else {
+                // Any non-text token makes it invalid
+                valid_heading = false;
+                break;
+            }
+        }
+    } else if (check(TokenType::Newline)) {
+        // No closing ==, use opening level as closing
+        closing_level = opening_level;
+        valid_heading = true;
+    } else {
+        // No closing and no newline (end of input)
+        closing_level = opening_level;
+        valid_heading = true;
+    }
+
+    // If invalid heading (text after closing ==), return as text
+    if (!valid_heading) {
+        // Convert to text node - this is not a valid heading
+        auto text = std::make_unique<TextNode>();
+        text->text = std::string(opening_level, '=');
+        // Add content
+        for (const auto& child : heading->content) {
+            if (child->type == NodeType::Text) {
+                text->text += static_cast<TextNode*>(child.get())->text;
+            }
+        }
+        text->text += std::string(closing_level, '=');
+        // Add the trailing text we found
+        while (!at_end() && !check(TokenType::Newline)) {
+            const Token &next = current();
+            if (next.type == TokenType::Text || next.type == TokenType::Whitespace) {
+                text->text += std::string(next.text);
+            }
+            advance();
+        }
+        return text;
+    }
+
+    // Calculate actual level: min of opening and closing
+    int actual_level = std::min(opening_level, closing_level);
+    heading->level = actual_level;
+
+    // Add excess = signs to content
+    if (opening_level > actual_level) {
+        // Add excess opening = to the front
+        int excess = opening_level - actual_level;
+        auto excess_text = std::make_unique<TextNode>(std::string(excess, '='));
+        heading->content.insert(heading->content.begin(), std::move(excess_text));
+    }
+
+    if (closing_level > actual_level) {
+        // Add excess closing = to the end
+        int excess = closing_level - actual_level;
+        auto excess_text = std::make_unique<TextNode>(std::string(excess, '='));
+        heading->content.push_back(std::move(excess_text));
     }
 
     // Skip newline after heading
