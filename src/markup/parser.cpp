@@ -386,99 +386,115 @@ NodePtr Parser::parse_heading() {
 
     advance(); // skip opening ==
 
-    // Parse content until closing == or newline
-    while (!at_end() && !check(TokenType::Heading) && !check(TokenType::Newline)) {
-        auto node = parse_node();
-        if (node) {
-            heading->content.push_back(std::move(node));
-        } else {
-            break;
-        }
+    // Collect all tokens until end of line
+    std::vector<Token> line_tokens;
+    while (!at_end() && !check(TokenType::Newline)) {
+        line_tokens.push_back(current());
+        advance();
     }
 
-    // Check for closing == and validate trailing content
+    // Special case: only equals signs (===, ====, etc.)
+    // When there's nothing after opening Heading token
+    if (line_tokens.empty()) {
+        // Just "=" or "==" etc. with nothing after
+        // Need at least 3 = for a valid heading (level 1 with empty or "=" title)
+        if (opening_level < 3) {
+            // Not a valid heading - return as text
+            auto text = std::make_unique<TextNode>(std::string(opening_level, '='));
+            if (check(TokenType::Newline)) {
+                advance();
+            }
+            return text;
+        }
+        // ===, ====, etc: split in half
+        int actual_level = opening_level / 2;
+        heading->level = actual_level;
+        // Middle = signs become title (if odd number)
+        int title_equals = opening_level - 2 * actual_level;
+        if (title_equals > 0) {
+            auto title_text = std::make_unique<TextNode>(std::string(title_equals, '='));
+            heading->content.push_back(std::move(title_text));
+        }
+        heading->location.end = opening_tok.location.end;
+        if (check(TokenType::Newline)) {
+            advance();
+        }
+        return heading;
+    }
+
+    // Find closing Heading token from the end
+    // Look for last Heading token that has only whitespace after it
+    int closing_idx = -1;
     int closing_level = 0;
-    bool valid_heading = false;
-
-    if (check(TokenType::Heading)) {
-        closing_level = current().level;
-        heading->location.end = current().location.end;
-        advance(); // skip closing ==
-
-        // After closing ==, only whitespace is allowed until newline
-        valid_heading = true;
-        while (!at_end() && !check(TokenType::Newline)) {
-            const Token &next = current();
-            // Only whitespace/spaces are allowed after closing ==
-            if (next.type == TokenType::Text || next.type == TokenType::Whitespace) {
-                std::string_view text = next.text;
-                // Check if it's only whitespace
-                bool only_whitespace = true;
-                for (char c : text) {
+    for (int i = static_cast<int>(line_tokens.size()) - 1; i >= 0; --i) {
+        if (line_tokens[i].type == TokenType::Heading) {
+            // Check if everything after is whitespace
+            bool only_whitespace_after = true;
+            for (size_t j = i + 1; j < line_tokens.size(); ++j) {
+                const Token& t = line_tokens[j];
+                if (t.type != TokenType::Text && t.type != TokenType::Whitespace) {
+                    only_whitespace_after = false;
+                    break;
+                }
+                for (char c : t.text) {
                     if (c != ' ' && c != '\t') {
-                        only_whitespace = false;
+                        only_whitespace_after = false;
                         break;
                     }
                 }
-                if (!only_whitespace) {
-                    // Non-whitespace text after closing == means invalid heading
-                    valid_heading = false;
-                    break;
-                }
-                advance();
-            } else {
-                // Any non-text token makes it invalid
-                valid_heading = false;
+                if (!only_whitespace_after) break;
+            }
+            if (only_whitespace_after) {
+                closing_idx = i;
+                closing_level = line_tokens[i].level;
                 break;
             }
         }
-    } else if (check(TokenType::Newline)) {
-        // No closing ==, use opening level as closing
-        closing_level = opening_level;
-        valid_heading = true;
-    } else {
-        // No closing and no newline (end of input)
-        closing_level = opening_level;
-        valid_heading = true;
     }
 
-    // If invalid heading (text after closing ==), return as text
-    if (!valid_heading) {
-        // Convert to text node - this is not a valid heading
+    // If no valid closing found, this is not a heading
+    if (closing_idx < 0) {
         auto text = std::make_unique<TextNode>();
         text->text = std::string(opening_level, '=');
-        // Add content
-        for (const auto& child : heading->content) {
-            if (child->type == NodeType::Text) {
-                text->text += static_cast<TextNode*>(child.get())->text;
-            }
+        for (const auto& tok : line_tokens) {
+            text->text += std::string(tok.text);
         }
-        text->text += std::string(closing_level, '=');
-        // Add the trailing text we found
-        while (!at_end() && !check(TokenType::Newline)) {
-            const Token &next = current();
-            if (next.type == TokenType::Text || next.type == TokenType::Whitespace) {
-                text->text += std::string(next.text);
-            }
+        if (check(TokenType::Newline)) {
             advance();
         }
         return text;
     }
 
+    // Build content from tokens before closing
+    for (int i = 0; i < closing_idx; ++i) {
+        const Token& tok = line_tokens[i];
+        if (tok.type == TokenType::Heading) {
+            // Heading tokens inside become text (e.g., == in title)
+            auto text_node = std::make_unique<TextNode>(std::string(tok.text));
+            heading->content.push_back(std::move(text_node));
+        } else if (tok.type == TokenType::Text || tok.type == TokenType::Whitespace) {
+            auto text_node = std::make_unique<TextNode>(std::string(tok.text));
+            heading->content.push_back(std::move(text_node));
+        } else {
+            // For other token types, just add as text for now
+            auto text_node = std::make_unique<TextNode>(std::string(tok.text));
+            heading->content.push_back(std::move(text_node));
+        }
+    }
+
     // Calculate actual level: min of opening and closing
     int actual_level = std::min(opening_level, closing_level);
     heading->level = actual_level;
+    heading->location.end = line_tokens[closing_idx].location.end;
 
     // Add excess = signs to content
     if (opening_level > actual_level) {
-        // Add excess opening = to the front
         int excess = opening_level - actual_level;
         auto excess_text = std::make_unique<TextNode>(std::string(excess, '='));
         heading->content.insert(heading->content.begin(), std::move(excess_text));
     }
 
     if (closing_level > actual_level) {
-        // Add excess closing = to the end
         int excess = closing_level - actual_level;
         auto excess_text = std::make_unique<TextNode>(std::string(excess, '='));
         heading->content.push_back(std::move(excess_text));
