@@ -826,6 +826,12 @@ std::string tokens_to_plain_text(std::span<const Token> tokens) {
     return result;
 }
 
+std::string wikitext_to_plain_text(std::string_view input) {
+    Tokenizer tok(input);
+    auto tokens = tok.tokenize_all();
+    return tokens_to_plain_text(tokens);
+}
+
 std::string strip_comments(std::string_view input) {
     std::string result;
     result.reserve(input.size());

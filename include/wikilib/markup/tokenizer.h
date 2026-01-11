@@ -239,6 +239,17 @@ private:
 [[nodiscard]] std::string tokens_to_plain_text(std::span<const Token> tokens);
 
 /**
+ * @brief Convert wikitext to plain text (convenience function)
+ *
+ * Tokenizes the input and extracts plain text content.
+ * Equivalent to tokens_to_plain_text(Tokenizer(input).tokenize_all())
+ *
+ * @param input The wikitext to convert
+ * @return Plain text with all markup stripped
+ */
+[[nodiscard]] std::string wikitext_to_plain_text(std::string_view input);
+
+/**
  * @brief Strip HTML comments from text (first pass preprocessing)
  *
  * Removes HTML comments (<!--...-->) while respecting nowiki tags.
