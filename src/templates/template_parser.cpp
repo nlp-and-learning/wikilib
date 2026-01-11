@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <regex>
+#include <nlohmann/json.hpp>
 
 namespace wikilib::templates {
 
@@ -84,141 +85,67 @@ TemplateDefinition TemplateParser::parse(std::string_view content) {
     return def;
 }
 
-std::vector<ParameterInfo> TemplateParser::parse_template_data(std::string_view json) {
+std::vector<ParameterInfo> TemplateParser::parse_template_data(std::string_view json_str) {
     std::vector<ParameterInfo> params;
 
-    // Simple JSON parsing for TemplateData format
-    // Looking for "params": { "name": { ... }, ... }
+    try {
+        // Parse JSON using nlohmann/json
+        auto json = nlohmann::json::parse(json_str);
 
-    size_t params_pos = json.find("\"params\"");
-    if (params_pos == std::string_view::npos) {
-        return params;
-    }
-
-    // Find the opening brace of params object
-    size_t brace_start = json.find('{', params_pos + 8);
-    if (brace_start == std::string_view::npos) {
-        return params;
-    }
-
-    // Parse parameter entries
-    int depth = 1;
-    size_t i = brace_start + 1;
-    std::string current_name;
-    bool in_string = false;
-    bool escape_next = false;
-
-    while (i < json.size() && depth > 0) {
-        char c = json[i];
-
-        if (escape_next) {
-            escape_next = false;
-            ++i;
-            continue;
+        // Check if "params" key exists
+        if (!json.contains("params")) {
+            return params;
         }
 
-        if (c == '\\') {
-            escape_next = true;
-            ++i;
-            continue;
+        auto& params_obj = json["params"];
+        if (!params_obj.is_object()) {
+            return params;
         }
 
-        if (c == '"') {
-            in_string = !in_string;
-            if (in_string && depth == 1) {
-                // Start of parameter name
-                size_t name_start = i + 1;
-                size_t name_end = json.find('"', name_start);
-                if (name_end != std::string_view::npos) {
-                    current_name = std::string(json.substr(name_start, name_end - name_start));
-                    i = name_end;
+        // Iterate over each parameter
+        for (auto& [name, param_data] : params_obj.items()) {
+            ParameterInfo info;
+            info.name = name;
+
+            if (!param_data.is_object()) {
+                continue;
+            }
+
+            // Extract description
+            if (param_data.contains("description") && param_data["description"].is_string()) {
+                info.description = param_data["description"].get<std::string>();
+            }
+
+            // Extract default value
+            if (param_data.contains("default")) {
+                if (param_data["default"].is_string()) {
+                    info.default_value = param_data["default"].get<std::string>();
+                } else if (!param_data["default"].is_null()) {
+                    // Convert non-string defaults to string
+                    info.default_value = param_data["default"].dump();
                 }
             }
-        } else if (!in_string) {
-            if (c == '{') {
-                depth++;
-                if (depth == 2 && !current_name.empty()) {
-                    // Start of parameter object
-                    ParameterInfo info;
-                    info.name = current_name;
 
-                    // Find the end of this parameter object
-                    int param_depth = 1;
-                    size_t param_start = i + 1;
-                    size_t j = param_start;
-                    bool param_in_string = false;
-
-                    while (j < json.size() && param_depth > 0) {
-                        char pc = json[j];
-                        if (pc == '"' && (j == 0 || json[j - 1] != '\\')) {
-                            param_in_string = !param_in_string;
-                        } else if (!param_in_string) {
-                            if (pc == '{')
-                                param_depth++;
-                            else if (pc == '}')
-                                param_depth--;
-                        }
-                        ++j;
-                    }
-
-                    std::string_view param_json = json.substr(param_start, j - param_start - 1);
-
-                    // Extract description
-                    size_t desc_pos = param_json.find("\"description\"");
-                    if (desc_pos != std::string_view::npos) {
-                        size_t colon = param_json.find(':', desc_pos);
-                        size_t quote_start = param_json.find('"', colon + 1);
-                        if (quote_start != std::string_view::npos) {
-                            size_t quote_end = quote_start + 1;
-                            while (quote_end < param_json.size()) {
-                                if (param_json[quote_end] == '"' && param_json[quote_end - 1] != '\\') {
-                                    break;
-                                }
-                                ++quote_end;
-                            }
-                            info.description =
-                                    std::string(param_json.substr(quote_start + 1, quote_end - quote_start - 1));
-                        }
-                    }
-
-                    // Extract default
-                    size_t default_pos = param_json.find("\"default\"");
-                    if (default_pos != std::string_view::npos) {
-                        size_t colon = param_json.find(':', default_pos);
-                        size_t quote_start = param_json.find('"', colon + 1);
-                        if (quote_start != std::string_view::npos) {
-                            size_t quote_end = quote_start + 1;
-                            while (quote_end < param_json.size()) {
-                                if (param_json[quote_end] == '"' && param_json[quote_end - 1] != '\\') {
-                                    break;
-                                }
-                                ++quote_end;
-                            }
-                            info.default_value =
-                                    std::string(param_json.substr(quote_start + 1, quote_end - quote_start - 1));
-                        }
-                    }
-
-                    // Check required
-                    size_t required_pos = param_json.find("\"required\"");
-                    if (required_pos != std::string_view::npos) {
-                        size_t true_pos = param_json.find("true", required_pos);
-                        if (true_pos != std::string_view::npos && true_pos < required_pos + 20) {
-                            info.required = true;
-                        }
-                    }
-
-                    params.push_back(std::move(info));
-                    current_name.clear();
-                    i = j - 1;
-                    depth = 1;
-                }
-            } else if (c == '}') {
-                depth--;
+            // Extract required flag
+            if (param_data.contains("required") && param_data["required"].is_boolean()) {
+                info.required = param_data["required"].get<bool>();
             }
-        }
 
-        ++i;
+            // Extract aliases
+            if (param_data.contains("aliases") && param_data["aliases"].is_array()) {
+                for (auto& alias : param_data["aliases"]) {
+                    if (alias.is_string()) {
+                        info.aliases.push_back(alias.get<std::string>());
+                    }
+                }
+            }
+
+            params.push_back(std::move(info));
+        }
+    } catch (const nlohmann::json::exception& e) {
+        // JSON parsing failed - return empty vector
+        // In production, might want to log this error
+        return params;
     }
 
     return params;

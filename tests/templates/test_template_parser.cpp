@@ -203,12 +203,7 @@ TEST(TemplateParserTest, ParseTemplateData_NoParams) {
     EXPECT_TRUE(params.empty());
 }
 
-// TODO: These tests are disabled because the simple JSON parser implementation
-// in parse_template_data() has limitations and doesn't handle all JSON formats correctly.
-// The parser works for MediaWiki TemplateData format in production, but needs
-// improvements to handle test cases reliably.
-
-TEST(TemplateParserTest, DISABLED_ParseTemplateData_SingleParam) {
+TEST(TemplateParserTest, ParseTemplateData_SingleParam) {
     TemplateParser parser;
     std::string json = R"({ "params": { "name": { "description": "The name parameter" } } })";
 
@@ -220,7 +215,7 @@ TEST(TemplateParserTest, DISABLED_ParseTemplateData_SingleParam) {
     EXPECT_EQ(*params[0].description, "The name parameter");
 }
 
-TEST(TemplateParserTest, DISABLED_ParseTemplateData_MultipleParams) {
+TEST(TemplateParserTest, ParseTemplateData_MultipleParams) {
     TemplateParser parser;
     std::string json = R"({"params": {"name": {"description": "Name"}, "age": {"description": "Age"}}})";
 
@@ -229,7 +224,7 @@ TEST(TemplateParserTest, DISABLED_ParseTemplateData_MultipleParams) {
     EXPECT_EQ(params.size(), 2u);
 }
 
-TEST(TemplateParserTest, DISABLED_ParseTemplateData_WithDefault) {
+TEST(TemplateParserTest, ParseTemplateData_WithDefault) {
     TemplateParser parser;
     std::string json = R"({"params": {"greeting": {"description": "The greeting", "default": "Hello"}}})";
 
@@ -241,7 +236,7 @@ TEST(TemplateParserTest, DISABLED_ParseTemplateData_WithDefault) {
     EXPECT_EQ(*params[0].default_value, "Hello");
 }
 
-TEST(TemplateParserTest, DISABLED_ParseTemplateData_Required) {
+TEST(TemplateParserTest, ParseTemplateData_Required) {
     TemplateParser parser;
     std::string json = R"({"params": {"required_param": {"description": "A required parameter", "required": true}}})";
 
@@ -277,9 +272,19 @@ TEST(TemplateParserTest, ParseTemplateData_RealWorld_Simple) {
 
     auto params = parser.parse_template_data(json);
 
-    // Parser may not extract all params due to implementation limits
-    // Just verify it doesn't crash and can extract at least some data
-    EXPECT_GE(params.size(), 0u);
+    ASSERT_EQ(params.size(), 2u);
+
+    // Check title parameter
+    bool found_title = false;
+    for (const auto& p : params) {
+        if (p.name == "title") {
+            found_title = true;
+            EXPECT_TRUE(p.required);
+            ASSERT_TRUE(p.description.has_value());
+            EXPECT_EQ(*p.description, "The title of the work");
+        }
+    }
+    EXPECT_TRUE(found_title);
 }
 
 TEST(TemplateParserTest, ParseTemplateData_RealWorld_WithSuggestedValues) {

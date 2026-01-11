@@ -92,6 +92,7 @@ target_link_libraries(wikilib
         pugixml::pugixml
         ICU::uc
         ICU::i18n
+        nlohmann_json::nlohmann_json
 )
 
 # ============================================================================
