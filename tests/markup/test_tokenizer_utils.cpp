@@ -47,18 +47,25 @@ TEST_F(TokenizerUtilsTest, PlainText_StripsBoldItalic) {
 }
 
 TEST_F(TokenizerUtilsTest, PlainText_StripsLink) {
+    // Strips [[ and ]] markup, keeps target text
     EXPECT_EQ(to_plain_text("See [[Article]] here"), "See Article here");
 }
 
 TEST_F(TokenizerUtilsTest, PlainText_StripsLinkWithPipe) {
+    // Note: This extracts raw text from tokens, NOT display text.
+    // Both target and display parts are kept (without | separator).
+    // For display text extraction, use AST-level functions.
     EXPECT_EQ(to_plain_text("See [[Article|display text]] here"), "See Articledisplay text here");
 }
 
 TEST_F(TokenizerUtilsTest, PlainText_StripsTemplate) {
+    // Strips {{ and }}, keeps template name as text
+    // Note: Does NOT expand templates - that requires template definitions
     EXPECT_EQ(to_plain_text("Hello {{template}} world"), "Hello template world");
 }
 
 TEST_F(TokenizerUtilsTest, PlainText_StripsTemplateWithParams) {
+    // All text content preserved (name, param names, values), markup stripped
     EXPECT_EQ(to_plain_text("Hello {{template|param=value}} world"), "Hello templateparamvalue world");
 }
 
