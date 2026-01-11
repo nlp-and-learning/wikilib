@@ -359,9 +359,8 @@ std::string url_to_title(std::string_view url) {
 // ============================================================================
 
 Utf8Iterator::Utf8Iterator(std::string_view str, size_t pos) : str_(str), pos_(pos) {
-    if (pos_ < str_.size()) {
-        advance();
-    }
+    // Decode current character without advancing position
+    decode_current();
 }
 
 char32_t Utf8Iterator::operator*() const {
@@ -387,14 +386,30 @@ bool Utf8Iterator::operator!=(const Utf8Iterator &other) const {
     return !(*this == other);
 }
 
+void Utf8Iterator::decode_current() {
+    if (pos_ >= str_.size()) {
+        current_ = 0;
+        return;
+    }
+
+    // Decode without modifying pos_
+    size_t temp_pos = pos_;
+    auto cp = decode_utf8(str_, temp_pos);
+    current_ = cp.value_or(0xFFFD); // Replacement character on error
+}
+
 void Utf8Iterator::advance() {
     if (pos_ >= str_.size()) {
         current_ = 0;
         return;
     }
 
+    // Advance position by decoding current character
     auto cp = decode_utf8(str_, pos_);
-    current_ = cp.value_or(0xFFFD); // Replacement character on error
+    (void)cp; // We don't need the value, just the side effect of advancing pos_
+
+    // Now decode the new current character
+    decode_current();
 }
 
 } // namespace wikilib::unicode

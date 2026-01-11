@@ -185,6 +185,7 @@ private:
     size_t pos_ = 0;
     char32_t current_ = 0;
 
+    void decode_current();
     void advance();
 };
 
