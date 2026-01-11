@@ -14,6 +14,7 @@ add_executable(wikilib_tests
     markup/test_ast.cpp
     markup/test_heading.cpp
     templates/test_template_parser.cpp
+    templates/test_complex_templates.cpp
 )
 
 target_link_libraries(wikilib_tests
