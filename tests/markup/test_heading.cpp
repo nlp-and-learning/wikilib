@@ -6,6 +6,7 @@
  */
 
 #include <gtest/gtest.h>
+#include "wikilib/markup/heading.h"
 #include "wikilib/markup/parser.h"
 #include "wikilib/markup/tokenizer.h"
 
@@ -13,42 +14,6 @@ using namespace wikilib;
 using namespace wikilib::markup;
 
 class HeadingTest : public ::testing::Test {
-protected:
-    // Helper to parse and extract heading info
-    struct HeadingInfo {
-        int level = 0;
-        std::string title;
-        bool found = false;
-    };
-
-    HeadingInfo parseHeading(const std::string& input) {
-        Parser parser;
-        auto result = parser.parse(input);
-
-        HeadingInfo info;
-        if (!result.success()) {
-            return info;
-        }
-
-        for (const auto& node : result.document->content) {
-            if (node->type == NodeType::Heading) {
-                info.found = true;
-                auto* heading = static_cast<HeadingNode*>(node.get());
-                info.level = heading->level;
-
-                // Extract title from content
-                for (const auto& child : heading->content) {
-                    if (child->type == NodeType::Text) {
-                        auto* text = static_cast<TextNode*>(child.get());
-                        info.title += text->text;
-                    }
-                }
-                break;
-            }
-        }
-
-        return info;
-    }
 };
 
 // ============================================================================
@@ -57,28 +22,28 @@ protected:
 
 TEST_F(HeadingTest, SingleEquals) {
     // =header= should work with level 1
-    auto info = parseHeading("=header=");
+    auto info = parse_heading("=header=");
     EXPECT_TRUE(info.found);
     EXPECT_EQ(1, info.level);
     EXPECT_EQ("header", info.title);
 }
 
 TEST_F(HeadingTest, DoubleEquals) {
-    auto info = parseHeading("==header==");
+    auto info = parse_heading("==header==");
     EXPECT_TRUE(info.found);
     EXPECT_EQ(2, info.level);
     EXPECT_EQ("header", info.title);
 }
 
 TEST_F(HeadingTest, TripleEquals) {
-    auto info = parseHeading("===123===");
+    auto info = parse_heading("===123===");
     EXPECT_TRUE(info.found);
     EXPECT_EQ(3, info.level);
     EXPECT_EQ("123", info.title);
 }
 
 TEST_F(HeadingTest, MaxLevel6) {
-    auto info = parseHeading("======header======");
+    auto info = parse_heading("======header======");
     EXPECT_TRUE(info.found);
     EXPECT_EQ(6, info.level);
     EXPECT_EQ("header", info.title);
@@ -90,7 +55,7 @@ TEST_F(HeadingTest, MaxLevel6) {
 
 TEST_F(HeadingTest, UnbalancedMore_Before) {
     // ===header= should use min(3,1)=1, title="==header"
-    auto info = parseHeading("===header=");
+    auto info = parse_heading("===header=");
     EXPECT_TRUE(info.found);
     EXPECT_EQ(1, info.level);
     EXPECT_EQ("==header", info.title);
@@ -98,7 +63,7 @@ TEST_F(HeadingTest, UnbalancedMore_Before) {
 
 TEST_F(HeadingTest, UnbalancedMore_After) {
     // =header=== should use min(1,3)=1, title="header=="
-    auto info = parseHeading("=header===");
+    auto info = parse_heading("=header===");
     EXPECT_TRUE(info.found);
     EXPECT_EQ(1, info.level);
     EXPECT_EQ("header==", info.title);
@@ -106,7 +71,7 @@ TEST_F(HeadingTest, UnbalancedMore_After) {
 
 TEST_F(HeadingTest, UnbalancedLevel2) {
     // ===abc== should use min(3,2)=2, title="=abc"
-    auto info = parseHeading("===abc==");
+    auto info = parse_heading("===abc==");
     EXPECT_TRUE(info.found);
     EXPECT_EQ(2, info.level);
     EXPECT_EQ("=abc", info.title);
@@ -118,7 +83,7 @@ TEST_F(HeadingTest, UnbalancedLevel2) {
 
 TEST_F(HeadingTest, TrailingSpaces_Valid) {
     // ==header==   (trailing spaces OK)
-    auto info = parseHeading("==header==  ");
+    auto info = parse_heading("==header==  ");
     EXPECT_TRUE(info.found);
     EXPECT_EQ(2, info.level);
     EXPECT_EQ("header", info.title);
@@ -126,18 +91,18 @@ TEST_F(HeadingTest, TrailingSpaces_Valid) {
 
 TEST_F(HeadingTest, TrailingText_Invalid) {
     // ==header==  abc (text after closing = invalid)
-    auto info = parseHeading("==header==  abc");
+    auto info = parse_heading("==header==  abc");
     EXPECT_FALSE(info.found);
 }
 
 TEST_F(HeadingTest, LeadingSpaces_Invalid) {
     // Leading spaces make it invalid (not at line start)
-    auto info = parseHeading(" ==header==");
+    auto info = parse_heading(" ==header==");
     EXPECT_FALSE(info.found);
 }
 
 TEST_F(HeadingTest, LeadingSpaces_MultipleInvalid) {
-    auto info = parseHeading("    ==header==");
+    auto info = parse_heading("    ==header==");
     EXPECT_FALSE(info.found);
 }
 
@@ -147,7 +112,7 @@ TEST_F(HeadingTest, LeadingSpaces_MultipleInvalid) {
 
 TEST_F(HeadingTest, EqualsInside) {
     // =header==header= should give title "header==header"
-    auto info = parseHeading("=header==header=");
+    auto info = parse_heading("=header==header=");
     EXPECT_TRUE(info.found);
     EXPECT_EQ(1, info.level);
     EXPECT_EQ("header==header", info.title);
@@ -160,7 +125,7 @@ TEST_F(HeadingTest, EqualsInside) {
 TEST_F(HeadingTest, CommentInside) {
     // == <!-- dd --> aa== should give title "  aa"
     // Comments are filtered out before parsing, both spaces remain
-    auto info = parseHeading(strip_comments_and_nowiki("== <!-- dd --> aa=="));
+    auto info = parse_heading(strip_comments_and_nowiki("== <!-- dd --> aa=="));
     EXPECT_TRUE(info.found);
     EXPECT_EQ(2, info.level);
     EXPECT_EQ("  aa", info.title); // Both spaces (before and after comment) remain
@@ -169,7 +134,7 @@ TEST_F(HeadingTest, CommentInside) {
 TEST_F(HeadingTest, CommentBefore) {
     // <!-- dd -->==aa== is valid (comment before heading)
     // Comments are filtered out before parsing
-    auto info = parseHeading(strip_comments_and_nowiki("<!-- dd -->==aa=="));
+    auto info = parse_heading(strip_comments_and_nowiki("<!-- dd -->==aa=="));
     EXPECT_TRUE(info.found);
     EXPECT_EQ(2, info.level);
     EXPECT_EQ("aa", info.title);
@@ -181,25 +146,25 @@ TEST_F(HeadingTest, CommentBefore) {
 
 TEST_F(HeadingTest, AloneEquals_Empty) {
     // Empty string
-    auto info = parseHeading("");
+    auto info = parse_heading("");
     EXPECT_FALSE(info.found);
 }
 
 TEST_F(HeadingTest, AloneEquals_Single) {
     // Single =
-    auto info = parseHeading("=");
+    auto info = parse_heading("=");
     EXPECT_FALSE(info.found);
 }
 
 TEST_F(HeadingTest, AloneEquals_Double) {
     // ==
-    auto info = parseHeading("==");
+    auto info = parse_heading("==");
     EXPECT_FALSE(info.found);
 }
 
 TEST_F(HeadingTest, AloneEquals_Triple) {
     // === should give level 1, title "="
-    auto info = parseHeading("===");
+    auto info = parse_heading("===");
     EXPECT_TRUE(info.found);
     EXPECT_EQ(1, info.level);
     EXPECT_EQ("=", info.title);
@@ -207,7 +172,7 @@ TEST_F(HeadingTest, AloneEquals_Triple) {
 
 TEST_F(HeadingTest, AloneEquals_Four) {
     // ==== should give level 2, title ""
-    auto info = parseHeading("====");
+    auto info = parse_heading("====");
     EXPECT_TRUE(info.found);
     EXPECT_EQ(2, info.level);
     EXPECT_EQ("", info.title);

@@ -49,6 +49,7 @@ target_sources(wikilib PRIVATE
     src/markup/tokenizer.cpp
     src/markup/parser.cpp
     src/markup/ast.cpp
+    src/markup/heading.cpp
     src/markup/wikitext_visitor.cpp
     
     # Template handling
