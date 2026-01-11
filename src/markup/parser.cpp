@@ -333,11 +333,18 @@ NodePtr Parser::parse_node() {
         case TokenType::TemplateClose:
         case TokenType::ParameterClose:
         case TokenType::ExternalLinkClose:
-        case TokenType::TableEnd:
-        case TokenType::TableRowStart:
         case TokenType::HtmlTagClose:
             // End markers - return nullptr to signal parent to stop
             return nullptr;
+
+        case TokenType::TableEnd:
+        case TokenType::TableRowStart:
+            // Table markers - end marker when parsing tables, otherwise treat as text
+            if (config_.parse_tables) {
+                return nullptr;
+            }
+            advance();
+            return std::make_unique<TextNode>(std::string(tok.text));
 
         default:
             // Unknown token - treat as text

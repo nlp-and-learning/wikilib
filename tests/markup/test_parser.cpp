@@ -540,9 +540,6 @@ TEST(ParserTest, ParserConfig_Default) {
     EXPECT_GT(config.max_depth, 0);
 }
 
-// TODO: This test causes the parser to hang - needs investigation
-// Likely an infinite loop when encountering table markup with parse_tables=false
-/*
 TEST(ParserTest, ParserConfig_DisableTables) {
     ParserConfig config;
     config.parse_tables = false;
@@ -552,8 +549,15 @@ TEST(ParserTest, ParserConfig_DisableTables) {
 
     ASSERT_TRUE(result.success());
     // Tables should not be parsed, treated as text or ignored
+    // No Table node should be present
+    bool found_table = false;
+    for (const auto& node : result.document->content) {
+        if (node->type == NodeType::Table) {
+            found_table = true;
+        }
+    }
+    EXPECT_FALSE(found_table);
 }
-*/
 
 // ============================================================================
 // Error handling tests
