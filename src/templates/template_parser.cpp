@@ -248,9 +248,9 @@ std::optional<std::string> TemplateParser::get_redirect_target(std::string_view 
 // TemplateInvocation implementation
 // ============================================================================
 
-std::optional<std::string_view> TemplateInvocation::get(std::string_view name) const {
-    for (const auto &[param_name, value]: parameters) {
-        if (param_name == name) {
+std::optional<std::string_view> TemplateInvocation::get(std::string_view param_name) const {
+    for (const auto &[pname, value]: parameters) {
+        if (pname == param_name) {
             return value;
         }
     }
@@ -286,8 +286,8 @@ std::optional<std::string_view> TemplateInvocation::get(size_t position) const {
     return std::nullopt;
 }
 
-std::string_view TemplateInvocation::get_or(std::string_view name, std::string_view default_value) const {
-    auto result = get(name);
+std::string_view TemplateInvocation::get_or(std::string_view param_name, std::string_view default_value) const {
+    auto result = get(param_name);
     return result.value_or(default_value);
 }
 

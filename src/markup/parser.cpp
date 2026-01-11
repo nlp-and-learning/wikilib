@@ -23,7 +23,7 @@ ParseResult Parser::parse(std::string_view input) {
     return parse(input, PageInfo{});
 }
 
-ParseResult Parser::parse(std::string_view input, const PageInfo &page) {
+ParseResult Parser::parse(std::string_view input, [[maybe_unused]] const PageInfo &page) {
     tokenizer_ = std::make_unique<Tokenizer>(input, config_.tokenizer);
     errors_.clear();
     depth_ = 0;
@@ -1066,12 +1066,16 @@ NodePtr Parser::parse_html_tag() {
 
 void Parser::advance() {
     if (tokenizer_) {
-        tokenizer_->next();
+        (void)tokenizer_->next();
     }
 }
 
 const Token &Parser::current() const {
-    static Token eof_token{TokenType::EndOfInput, {}, {}};
+    static const Token eof_token = []() {
+        Token tok;
+        tok.type = TokenType::EndOfInput;
+        return tok;
+    }();
     if (tokenizer_) {
         return tokenizer_->peek();
     }

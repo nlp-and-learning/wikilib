@@ -17,9 +17,9 @@ namespace wikilib::dump {
 // XmlEvent implementation
 // ============================================================================
 
-std::optional<std::string_view> XmlEvent::get_attribute(std::string_view name) const {
+std::optional<std::string_view> XmlEvent::get_attribute(std::string_view attr_name) const {
     for (const auto &attr: attributes) {
-        if (attr.name == name) {
+        if (attr.name == attr_name) {
             return attr.value;
         }
     }
@@ -597,9 +597,9 @@ std::string_view XmlReader::error() const noexcept {
 // XmlElementIterator implementation
 // ============================================================================
 
-std::optional<std::string_view> XmlElementIterator::Element::attribute(std::string_view name) const {
+std::optional<std::string_view> XmlElementIterator::Element::attribute(std::string_view attr_name) const {
     for (const auto &attr: attributes) {
-        if (attr.name == name) {
+        if (attr.name == attr_name) {
             return attr.value;
         }
     }

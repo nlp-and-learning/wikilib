@@ -4,6 +4,7 @@
  */
 
 #include "wikilib/core/text_utils.hpp"
+#include "wikilib/core/types.h"
 #include <algorithm>
 #include <cctype>
 #include <sstream>
@@ -363,7 +364,7 @@ std::string decode_html_entities(std::string_view str) {
 
 std::string encode_html_entities(std::string_view str) {
     std::string result;
-    result.reserve(str.size() * 1.1); // Assume ~10% expansion
+    result.reserve(str.size() + str.size() / 10); // Assume ~10% expansion
 
     for (char c: str) {
         switch (c) {
@@ -468,3 +469,46 @@ std::optional<std::string_view> get_line(std::string_view str, size_t line_numbe
 }
 
 } // namespace wikilib::text
+
+// ============================================================================
+// ParseError implementation
+// ============================================================================
+
+namespace wikilib {
+
+std::string ParseError::format() const {
+    std::string result;
+
+    // Severity prefix
+    switch (severity) {
+        case ErrorSeverity::Warning:
+            result = "Warning: ";
+            break;
+        case ErrorSeverity::Error:
+            result = "Error: ";
+            break;
+        case ErrorSeverity::Fatal:
+            result = "Fatal: ";
+            break;
+    }
+
+    result += message;
+
+    // Add location if available
+    if (location.begin.line > 0) {
+        result += " at line ";
+        result += std::to_string(location.begin.line);
+        result += ", column ";
+        result += std::to_string(location.begin.column);
+    }
+
+    // Add context if available
+    if (!context.empty()) {
+        result += "\n  Context: ";
+        result += context;
+    }
+
+    return result;
+}
+
+} // namespace wikilib

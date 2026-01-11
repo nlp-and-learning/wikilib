@@ -174,9 +174,9 @@ std::string TemplateNode::to_wikitext() const {
     return result;
 }
 
-const TemplateParameter *TemplateNode::get_param(std::string_view name) const {
+const TemplateParameter *TemplateNode::get_param(std::string_view param_name) const {
     for (const auto &param: parameters) {
-        if (param.name.has_value() && param.name.value() == name) {
+        if (param.name.has_value() && param.name.value() == param_name) {
             return &param;
         }
     }

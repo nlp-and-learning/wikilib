@@ -206,8 +206,8 @@ TEST(UnsafeStringPoolTest, Contains) {
 TEST(UnsafeStringPoolTest, Clear) {
     UnsafeStringPool pool;
 
-    (void)pool.intern("one");
-    (void)pool.intern("two");
+    pool.intern("one");
+    pool.intern("two");
 
     EXPECT_EQ(pool.size(), 2u);
 

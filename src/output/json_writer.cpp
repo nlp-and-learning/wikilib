@@ -793,7 +793,7 @@ void JsonWriter::write_children(const std::vector<std::unique_ptr<markup::Node>>
 // JsonLinesWriter implementation
 // ============================================================================
 
-JsonLinesWriter::JsonLinesWriter(std::ostream &output) : output_(&output) {
+JsonLinesWriter::JsonLinesWriter(std::ostream &output) : owned_output_(nullptr), output_(&output) {
 }
 
 JsonLinesWriter::JsonLinesWriter(const std::string &path) :

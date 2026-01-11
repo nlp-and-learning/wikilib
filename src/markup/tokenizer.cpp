@@ -192,12 +192,24 @@ std::vector<Token> Tokenizer::tokenize_all() {
 }
 
 // ============================================================================
+// Helper to create tokens without missing-initializer warnings
+// ============================================================================
+
+static Token make_token(TokenType type, std::string_view text, SourceRange location) {
+    Token tok;
+    tok.type = type;
+    tok.text = text;
+    tok.location = location;
+    return tok;
+}
+
+// ============================================================================
 // Private scanning methods
 // ============================================================================
 
 Token Tokenizer::scan_token() {
     if (at_end()) {
-        return Token{TokenType::EndOfInput, {}, {current_pos_, current_pos_}};
+        return make_token(TokenType::EndOfInput, {}, {current_pos_, current_pos_});
     }
 
     SourcePosition start = current_pos_;
@@ -207,7 +219,7 @@ Token Tokenizer::scan_token() {
     if (c == '\n') {
         advance();
         at_line_start_ = true;
-        return Token{TokenType::Newline, input_.substr(start.offset, 1), {start, current_pos_}};
+        return make_token(TokenType::Newline, input_.substr(start.offset, 1), {start, current_pos_});
     }
 
     // Line-start constructs
@@ -220,7 +232,7 @@ Token Tokenizer::scan_token() {
             while (!at_end() && current() == '-') {
                 advance();
             }
-            return Token{TokenType::HorizontalRule, input_.substr(begin, pos_ - begin), {start, current_pos_}};
+            return make_token(TokenType::HorizontalRule, input_.substr(begin, pos_ - begin), {start, current_pos_});
         }
 
         // Heading: == at line start
@@ -237,7 +249,7 @@ Token Tokenizer::scan_token() {
         if (c == '{' && peek_char() == '|') {
             advance(2);
             in_table_ = true;
-            return Token{TokenType::TableStart, input_.substr(start.offset, 2), {start, current_pos_}};
+            return make_token(TokenType::TableStart, input_.substr(start.offset, 2), {start, current_pos_});
         }
 
         // Table row/end at line start
@@ -245,26 +257,26 @@ Token Tokenizer::scan_token() {
             if (peek_char() == '}') {
                 advance(2);
                 in_table_ = false;
-                return Token{TokenType::TableEnd, input_.substr(start.offset, 2), {start, current_pos_}};
+                return make_token(TokenType::TableEnd, input_.substr(start.offset, 2), {start, current_pos_});
             }
             if (peek_char() == '-') {
                 advance(2);
-                return Token{TokenType::TableRowStart, input_.substr(start.offset, 2), {start, current_pos_}};
+                return make_token(TokenType::TableRowStart, input_.substr(start.offset, 2), {start, current_pos_});
             }
             if (peek_char() == '+') {
                 advance(2);
-                return Token{TokenType::TableCaption, input_.substr(start.offset, 2), {start, current_pos_}};
+                return make_token(TokenType::TableCaption, input_.substr(start.offset, 2), {start, current_pos_});
             }
             if (in_table_) {
                 advance();
-                return Token{TokenType::TableDataCell, input_.substr(start.offset, 1), {start, current_pos_}};
+                return make_token(TokenType::TableDataCell, input_.substr(start.offset, 1), {start, current_pos_});
             }
         }
 
         // Table header cell: ! at line start
         if (c == '!' && in_table_) {
             advance();
-            return Token{TokenType::TableHeaderCell, input_.substr(start.offset, 1), {start, current_pos_}};
+            return make_token(TokenType::TableHeaderCell, input_.substr(start.offset, 1), {start, current_pos_});
         }
     }
 
@@ -293,10 +305,10 @@ Token Tokenizer::scan_token() {
         if (peek_char() == ']' && link_depth_ > 0) {
             advance(2);
             link_depth_--;
-            return Token{TokenType::LinkClose, input_.substr(start.offset, 2), {start, current_pos_}};
+            return make_token(TokenType::LinkClose, input_.substr(start.offset, 2), {start, current_pos_});
         }
         advance();
-        return Token{TokenType::ExternalLinkClose, input_.substr(start.offset, 1), {start, current_pos_}};
+        return make_token(TokenType::ExternalLinkClose, input_.substr(start.offset, 1), {start, current_pos_});
     }
 
     // Templates and parameters: {{{ or {{
@@ -309,12 +321,12 @@ Token Tokenizer::scan_token() {
         if (match("}}}") && template_depth_ > 0) {
             advance(3);
             template_depth_--;
-            return Token{TokenType::ParameterClose, input_.substr(start.offset, 3), {start, current_pos_}};
+            return make_token(TokenType::ParameterClose, input_.substr(start.offset, 3), {start, current_pos_});
         }
         if (match("}}") && template_depth_ > 0) {
             advance(2);
             template_depth_--;
-            return Token{TokenType::TemplateClose, input_.substr(start.offset, 2), {start, current_pos_}};
+            return make_token(TokenType::TemplateClose, input_.substr(start.offset, 2), {start, current_pos_});
         }
     }
 
@@ -322,19 +334,19 @@ Token Tokenizer::scan_token() {
     if (c == '|') {
         advance();
         if (link_depth_ > 0) {
-            return Token{TokenType::LinkSeparator, input_.substr(start.offset, 1), {start, current_pos_}};
+            return make_token(TokenType::LinkSeparator, input_.substr(start.offset, 1), {start, current_pos_});
         }
         if (template_depth_ > 0 || in_table_) {
-            return Token{TokenType::Pipe, input_.substr(start.offset, 1), {start, current_pos_}};
+            return make_token(TokenType::Pipe, input_.substr(start.offset, 1), {start, current_pos_});
         }
         // Outside special context, treat as text
-        return Token{TokenType::Text, input_.substr(start.offset, 1), {start, current_pos_}};
+        return make_token(TokenType::Text, input_.substr(start.offset, 1), {start, current_pos_});
     }
 
     // Equals (in template context)
     if (c == '=' && template_depth_ > 0) {
         advance();
-        return Token{TokenType::Equals, input_.substr(start.offset, 1), {start, current_pos_}};
+        return make_token(TokenType::Equals, input_.substr(start.offset, 1), {start, current_pos_});
     }
 
     // HTML comment: <!--
@@ -362,7 +374,7 @@ Token Tokenizer::scan_token() {
         if (match("#REDIRECT") || match("#redirect") || match("#Redirect")) {
             size_t begin = pos_;
             advance(9); // #REDIRECT
-            return Token{TokenType::Redirect, input_.substr(begin, 9), {start, current_pos_}};
+            return make_token(TokenType::Redirect, input_.substr(begin, 9), {start, current_pos_});
         }
     }
 
@@ -391,7 +403,7 @@ Token Tokenizer::scan_text() {
         advance();
     }
 
-    return Token{TokenType::Text, input_.substr(begin, pos_ - begin), {start, current_pos_}};
+    return make_token(TokenType::Text, input_.substr(begin, pos_ - begin), {start, current_pos_});
 }
 
 Token Tokenizer::scan_formatting() {
@@ -423,10 +435,10 @@ Token Tokenizer::scan_formatting() {
         type = TokenType::Italic;
     } else {
         // Single apostrophe is just text
-        return Token{TokenType::Text, input_.substr(begin, 1), {start, current_pos_}};
+        return make_token(TokenType::Text, input_.substr(begin, 1), {start, current_pos_});
     }
 
-    return Token{type, input_.substr(begin, pos_ - begin), {start, current_pos_}};
+    return make_token(type, input_.substr(begin, pos_ - begin), {start, current_pos_});
 }
 
 Token Tokenizer::scan_link() {
@@ -442,16 +454,16 @@ Token Tokenizer::scan_link() {
             std::string_view rest = input_.substr(pos_);
             if (rest.starts_with("Category:") || rest.starts_with("category:") || rest.starts_with("Kategoria:") ||
                 rest.starts_with("kategoria:")) {
-                return Token{TokenType::Category, input_.substr(start.offset, 2), {start, current_pos_}};
+                return make_token(TokenType::Category, input_.substr(start.offset, 2), {start, current_pos_});
             }
         }
 
-        return Token{TokenType::LinkOpen, input_.substr(start.offset, 2), {start, current_pos_}};
+        return make_token(TokenType::LinkOpen, input_.substr(start.offset, 2), {start, current_pos_});
     }
 
     // Single [ for external link
     advance();
-    return Token{TokenType::ExternalLinkOpen, input_.substr(start.offset, 1), {start, current_pos_}};
+    return make_token(TokenType::ExternalLinkOpen, input_.substr(start.offset, 1), {start, current_pos_});
 }
 
 Token Tokenizer::scan_template() {
@@ -461,7 +473,7 @@ Token Tokenizer::scan_template() {
     if (match("{{{")) {
         advance(3);
         template_depth_++;
-        return Token{TokenType::ParameterOpen, input_.substr(start.offset, 3), {start, current_pos_}};
+        return make_token(TokenType::ParameterOpen, input_.substr(start.offset, 3), {start, current_pos_});
     }
 
     // Template: {{
@@ -471,15 +483,15 @@ Token Tokenizer::scan_template() {
 
         // Check for parser function: {{#
         if (!at_end() && current() == '#') {
-            return Token{TokenType::ParserFunction, input_.substr(start.offset, 2), {start, current_pos_}};
+            return make_token(TokenType::ParserFunction, input_.substr(start.offset, 2), {start, current_pos_});
         }
 
-        return Token{TokenType::TemplateOpen, input_.substr(start.offset, 2), {start, current_pos_}};
+        return make_token(TokenType::TemplateOpen, input_.substr(start.offset, 2), {start, current_pos_});
     }
 
     // Single { is just text
     advance();
-    return Token{TokenType::Text, input_.substr(start.offset, 1), {start, current_pos_}};
+    return make_token(TokenType::Text, input_.substr(start.offset, 1), {start, current_pos_});
 }
 
 Token Tokenizer::scan_table() {
@@ -488,27 +500,27 @@ Token Tokenizer::scan_table() {
     if (match("{|")) {
         advance(2);
         in_table_ = true;
-        return Token{TokenType::TableStart, input_.substr(start.offset, 2), {start, current_pos_}};
+        return make_token(TokenType::TableStart, input_.substr(start.offset, 2), {start, current_pos_});
     }
 
     if (match("|}")) {
         advance(2);
         in_table_ = false;
-        return Token{TokenType::TableEnd, input_.substr(start.offset, 2), {start, current_pos_}};
+        return make_token(TokenType::TableEnd, input_.substr(start.offset, 2), {start, current_pos_});
     }
 
     if (match("|-")) {
         advance(2);
-        return Token{TokenType::TableRowStart, input_.substr(start.offset, 2), {start, current_pos_}};
+        return make_token(TokenType::TableRowStart, input_.substr(start.offset, 2), {start, current_pos_});
     }
 
     if (match("|+")) {
         advance(2);
-        return Token{TokenType::TableCaption, input_.substr(start.offset, 2), {start, current_pos_}};
+        return make_token(TokenType::TableCaption, input_.substr(start.offset, 2), {start, current_pos_});
     }
 
     advance();
-    return Token{TokenType::TableDataCell, input_.substr(start.offset, 1), {start, current_pos_}};
+    return make_token(TokenType::TableDataCell, input_.substr(start.offset, 1), {start, current_pos_});
 }
 
 Token Tokenizer::scan_heading() {
@@ -599,7 +611,7 @@ Token Tokenizer::scan_html_tag() {
         current_pos_.offset = pos_;
 
         // Return '<' as text
-        return Token{TokenType::Text, input_.substr(begin, 1), {start, current_pos_}};
+        return make_token(TokenType::Text, input_.substr(begin, 1), {start, current_pos_});
     }
 
     // Skip to end of tag
@@ -711,11 +723,11 @@ Token Tokenizer::scan_magic_word() {
     // Check for closing __
     if (match("__")) {
         advance(2);
-        return Token{TokenType::MagicWord, input_.substr(begin, pos_ - begin), {start, current_pos_}};
+        return make_token(TokenType::MagicWord, input_.substr(begin, pos_ - begin), {start, current_pos_});
     }
 
     // Not a valid magic word, return as text
-    return Token{TokenType::Text, input_.substr(begin, pos_ - begin), {start, current_pos_}};
+    return make_token(TokenType::Text, input_.substr(begin, pos_ - begin), {start, current_pos_});
 }
 
 // ============================================================================

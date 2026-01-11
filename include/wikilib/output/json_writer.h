@@ -160,8 +160,8 @@ public:
         return count_;
     }
 private:
-    std::ostream *output_;
     std::unique_ptr<std::ostream> owned_output_;
+    std::ostream *output_;
     size_t count_ = 0;
 };
 

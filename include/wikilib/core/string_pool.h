@@ -105,7 +105,7 @@ public:
      * If the string already exists in the pool, returns existing handle.
      * Thread-safe.
      */
-    [[nodiscard]] InternedString intern(std::string_view str);
+    InternedString intern(std::string_view str);
 
     /**
      * @brief Check if string is already interned
@@ -180,7 +180,7 @@ class UnsafeStringPool {
 public:
     UnsafeStringPool() = default;
 
-    [[nodiscard]] InternedString intern(std::string_view str);
+    InternedString intern(std::string_view str);
     [[nodiscard]] bool contains(std::string_view str) const;
     [[nodiscard]] InternedString find(std::string_view str) const;
     [[nodiscard]] size_t size() const noexcept;

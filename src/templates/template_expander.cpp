@@ -77,7 +77,7 @@ Result<std::string> TemplateExpander::expand(std::string_view input, const PageI
     }
 }
 
-Result<void> TemplateExpander::expand_ast(markup::DocumentNode &doc, const PageInfo &page) {
+Result<void> TemplateExpander::expand_ast([[maybe_unused]] markup::DocumentNode &doc, const PageInfo &page) {
     // Walk the AST and expand template nodes
     ExpansionContext context;
     context.page = page;
@@ -490,11 +490,9 @@ std::string TemplateExpander::evaluate_expr(const std::vector<std::string> &args
         // Handle simple numbers
         bool all_digits = true;
         bool has_dot = false;
-        bool has_sign = false;
         size_t start = 0;
 
         if (!expr.empty() && (expr[0] == '+' || expr[0] == '-')) {
-            has_sign = true;
             start = 1;
         }
 
@@ -549,19 +547,19 @@ std::string TemplateExpander::evaluate_time(const std::vector<std::string> &args
         char c = format[i];
         switch (c) {
             case 'Y': { // 4-digit year
-                char buf[5];
+                char buf[16];
                 std::snprintf(buf, sizeof(buf), "%04d", 1900 + tm->tm_year);
                 result += buf;
                 break;
             }
             case 'y': { // 2-digit year
-                char buf[3];
+                char buf[16];
                 std::snprintf(buf, sizeof(buf), "%02d", tm->tm_year % 100);
                 result += buf;
                 break;
             }
             case 'm': { // Month (01-12)
-                char buf[3];
+                char buf[16];
                 std::snprintf(buf, sizeof(buf), "%02d", tm->tm_mon + 1);
                 result += buf;
                 break;
@@ -571,7 +569,7 @@ std::string TemplateExpander::evaluate_time(const std::vector<std::string> &args
                 break;
             }
             case 'd': { // Day (01-31)
-                char buf[3];
+                char buf[16];
                 std::snprintf(buf, sizeof(buf), "%02d", tm->tm_mday);
                 result += buf;
                 break;
@@ -581,19 +579,19 @@ std::string TemplateExpander::evaluate_time(const std::vector<std::string> &args
                 break;
             }
             case 'H': { // Hour (00-23)
-                char buf[3];
+                char buf[16];
                 std::snprintf(buf, sizeof(buf), "%02d", tm->tm_hour);
                 result += buf;
                 break;
             }
             case 'i': { // Minute (00-59)
-                char buf[3];
+                char buf[16];
                 std::snprintf(buf, sizeof(buf), "%02d", tm->tm_min);
                 result += buf;
                 break;
             }
             case 's': { // Second (00-59)
-                char buf[3];
+                char buf[16];
                 std::snprintf(buf, sizeof(buf), "%02d", tm->tm_sec);
                 result += buf;
                 break;
@@ -767,7 +765,7 @@ std::string evaluate_magic_word(MagicWord word, const ExpansionContext &context)
 
         case MagicWord::CurrentMonth:
             if (tm) {
-                char buf[3];
+                char buf[16];
                 std::snprintf(buf, sizeof(buf), "%02d", tm->tm_mon + 1);
                 return buf;
             }
@@ -775,7 +773,7 @@ std::string evaluate_magic_word(MagicWord word, const ExpansionContext &context)
 
         case MagicWord::CurrentDay:
             if (tm) {
-                char buf[3];
+                char buf[16];
                 std::snprintf(buf, sizeof(buf), "%02d", tm->tm_mday);
                 return buf;
             }
@@ -783,7 +781,7 @@ std::string evaluate_magic_word(MagicWord word, const ExpansionContext &context)
 
         case MagicWord::CurrentTime:
             if (tm) {
-                char buf[6];
+                char buf[32];
                 std::snprintf(buf, sizeof(buf), "%02d:%02d", tm->tm_hour, tm->tm_min);
                 return buf;
             }
@@ -791,7 +789,7 @@ std::string evaluate_magic_word(MagicWord word, const ExpansionContext &context)
 
         case MagicWord::CurrentTimestamp:
             if (tm) {
-                char buf[15];
+                char buf[32];
                 std::snprintf(buf, sizeof(buf), "%04d%02d%02d%02d%02d%02d", 1900 + tm->tm_year, tm->tm_mon + 1,
                               tm->tm_mday, tm->tm_hour, tm->tm_min, tm->tm_sec);
                 return buf;
