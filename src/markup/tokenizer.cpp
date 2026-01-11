@@ -607,7 +607,8 @@ Token Tokenizer::scan_html_tag() {
     while (!at_end() && current() != '>') {
         if (current() == '/' && peek_char() == '>') {
             self_closing = true;
-            advance();
+            advance(); // skip /
+            break;     // > will be consumed below
         }
         advance();
     }

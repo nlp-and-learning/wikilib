@@ -9,6 +9,7 @@ add_executable(wikilib_tests
     core/test_unicode_utils.cpp
     core/test_string_pool.cpp
     markup/test_tokenizer.cpp
+    markup/test_tokenizer_utils.cpp
     markup/test_parser.cpp
     markup/test_ast.cpp
     markup/test_heading.cpp
