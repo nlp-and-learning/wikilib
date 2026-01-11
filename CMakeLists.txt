@@ -50,6 +50,7 @@ target_sources(wikilib PRIVATE
     src/markup/parser.cpp
     src/markup/ast.cpp
     src/markup/heading.cpp
+    src/markup/section_tree.cpp
     src/markup/wikitext_visitor.cpp
     
     # Template handling

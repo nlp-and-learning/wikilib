@@ -13,6 +13,7 @@ add_executable(wikilib_tests
     markup/test_parser.cpp
     markup/test_ast.cpp
     markup/test_heading.cpp
+    markup/test_section_tree.cpp
     templates/test_template_parser.cpp
     templates/test_complex_templates.cpp
 )
