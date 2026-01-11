@@ -400,3 +400,177 @@ TEST_F(TokenizerTest, NoWiki_InsideCommentPart) {
     std::string result = tokens_to_string(tokens);
     EXPECT_EQ(result, "This is </nowiki text");
 }
+
+// ============================================================================
+// HTML tag validation tests
+// Based on z_innego_projektu/test_tag_parsing.cpp
+// ============================================================================
+
+TEST_F(TokenizerTest, Tag_ValidSpan) {
+    // "span" is a valid tag name
+    auto tokens = tokenize("<span>");
+
+    bool found_tag = false;
+    for (const auto& t : tokens) {
+        if (t.type == TokenType::HtmlTagOpen) {
+            found_tag = true;
+            EXPECT_EQ(t.tag_name, "span");
+        }
+    }
+    EXPECT_TRUE(found_tag);
+}
+
+TEST_F(TokenizerTest, Tag_ValidSub) {
+    // "sub" is a valid tag name
+    auto tokens = tokenize("<sub>");
+
+    bool found_tag = false;
+    for (const auto& t : tokens) {
+        if (t.type == TokenType::HtmlTagOpen) {
+            found_tag = true;
+            EXPECT_EQ(t.tag_name, "sub");
+        }
+    }
+    EXPECT_TRUE(found_tag);
+}
+
+TEST_F(TokenizerTest, Tag_ValidClosing) {
+    // "</sub>" is a valid closing tag
+    auto tokens = tokenize("</sub>");
+
+    bool found_tag = false;
+    for (const auto& t : tokens) {
+        if (t.type == TokenType::HtmlTagClose) {
+            found_tag = true;
+            EXPECT_EQ(t.tag_name, "sub");
+        }
+    }
+    EXPECT_TRUE(found_tag);
+}
+
+TEST_F(TokenizerTest, Tag_ValidSelfClosing) {
+    // "<br />" is a valid self-closing tag
+    auto tokens = tokenize("<br />");
+
+    bool found_tag = false;
+    for (const auto& t : tokens) {
+        if (t.type == TokenType::HtmlTagOpen) {
+            found_tag = true;
+            EXPECT_EQ(t.tag_name, "br");
+            EXPECT_TRUE(t.self_closing);
+        }
+    }
+    EXPECT_TRUE(found_tag);
+}
+
+TEST_F(TokenizerTest, Tag_InvalidSingleLetter) {
+    // "n" is NOT a valid tag name - should be treated as text
+    auto tokens = tokenize("m<n>a</n>");
+
+    // Should not find any HTML tags
+    bool found_tag = false;
+    for (const auto& t : tokens) {
+        if (t.type == TokenType::HtmlTagOpen || t.type == TokenType::HtmlTagClose) {
+            found_tag = true;
+        }
+    }
+    EXPECT_FALSE(found_tag);
+
+    // Should just be text with < and > characters
+    std::string result = tokens_to_string(tokens);
+    EXPECT_EQ(result, "m<n>a</n>");
+}
+
+TEST_F(TokenizerTest, Tag_InvalidName) {
+    // "xyz" is NOT a valid tag name
+    auto tokens = tokenize("<xyz>content</xyz>");
+
+    // Should not find any HTML tags
+    bool found_tag = false;
+    for (const auto& t : tokens) {
+        if (t.type == TokenType::HtmlTagOpen || t.type == TokenType::HtmlTagClose) {
+            found_tag = true;
+        }
+    }
+    EXPECT_FALSE(found_tag);
+}
+
+TEST_F(TokenizerTest, Tag_ValidInText) {
+    // Based on test_tag_parsing.cpp: ParseValidTagInText
+    // "m<span && m>a </span>" - span is valid
+    auto tokens = tokenize("m<span && m>a </span>");
+
+    bool found_opening = false;
+    bool found_closing = false;
+
+    for (const auto& t : tokens) {
+        if (t.type == TokenType::HtmlTagOpen && t.tag_name == "span") {
+            found_opening = true;
+        }
+        if (t.type == TokenType::HtmlTagClose && t.tag_name == "span") {
+            found_closing = true;
+        }
+    }
+
+    EXPECT_TRUE(found_opening);
+    EXPECT_TRUE(found_closing);
+}
+
+TEST_F(TokenizerTest, Tag_InvalidInText) {
+    // Based on test_tag_parsing.cpp: ParseInvalidNonTagInText
+    // "m<n && m>a </n>" - n is NOT valid
+    auto tokens = tokenize("m<n && m>a </n>");
+
+    // Should not find any HTML tags
+    bool found_tag = false;
+    for (const auto& t : tokens) {
+        if (t.type == TokenType::HtmlTagOpen || t.type == TokenType::HtmlTagClose) {
+            found_tag = true;
+        }
+    }
+    EXPECT_FALSE(found_tag);
+}
+
+TEST_F(TokenizerTest, Tag_AllValidTags) {
+    // Test a sample of valid tags
+    std::vector<std::string> valid_tags = {
+        "abbr", "b", "div", "span", "strong", "em", "code", "pre",
+        "h1", "h2", "h3", "p", "br", "hr", "table", "tr", "td", "th"
+    };
+
+    for (const auto& tag : valid_tags) {
+        std::string input = "<" + tag + ">";
+        auto tokens = tokenize(input);
+
+        bool found = false;
+        for (const auto& t : tokens) {
+            if (t.type == TokenType::HtmlTagOpen && t.tag_name == tag) {
+                found = true;
+                break;
+            }
+        }
+
+        EXPECT_TRUE(found) << "Tag '" << tag << "' should be recognized as valid";
+    }
+}
+
+TEST_F(TokenizerTest, Tag_MixedValidInvalid) {
+    // Mix of valid and invalid tags
+    auto tokens = tokenize("text <span>valid</span> more <xyz>invalid</xyz> end");
+
+    int valid_tags = 0;
+    int invalid_tags = 0;
+
+    for (const auto& t : tokens) {
+        if (t.type == TokenType::HtmlTagOpen || t.type == TokenType::HtmlTagClose) {
+            if (t.tag_name == "span") {
+                valid_tags++;
+            } else if (t.tag_name == "xyz") {
+                invalid_tags++;
+            }
+        }
+    }
+
+    EXPECT_EQ(valid_tags, 2);  // <span> and </span>
+    EXPECT_EQ(invalid_tags, 0); // xyz should not be recognized as tag
+}

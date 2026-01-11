@@ -100,6 +100,32 @@ namespace wikilib::markup {
 }
 
 // ============================================================================
+// Helper functions
+// ============================================================================
+
+/**
+ * @brief Check if a tag name is a valid HTML tag allowed in MediaWiki
+ *
+ * Based on tags from MediaWiki's Sanitizer.php and common HTML tags
+ * used in wikis. Does not include "nowiki" which is handled specially.
+ */
+static bool is_valid_html_tag(std::string_view tag_name) noexcept {
+    // List of allowed HTML tags in MediaWiki (from TagFactory.h)
+    // Sorted alphabetically for easier maintenance
+    static constexpr std::array<std::string_view, 63> valid_tags = {
+        "abbr", "b", "bdi", "bdo", "big", "blockquote", "br", "caption", "center",
+        "cite", "code", "col", "colgroup", "data", "dd", "del", "dfn", "div", "dl",
+        "dt", "em", "font", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "i", "ins",
+        "kbd", "li", "link", "mark", "meta", "ol", "p", "pre", "q", "rb", "rp",
+        "rt", "ruby", "s", "samp", "small", "span", "strike", "strong", "sub",
+        "sup", "table", "td", "th", "time", "tr", "tt", "u", "ul", "var", "wbr"
+    };
+
+    // Binary search since array is sorted
+    return std::binary_search(valid_tags.begin(), valid_tags.end(), tag_name);
+}
+
+// ============================================================================
 // Tokenizer implementation
 // ============================================================================
 
@@ -555,6 +581,18 @@ Token Tokenizer::scan_html_tag() {
         advance();
     }
     std::string_view tag_name = input_.substr(name_start, pos_ - name_start);
+
+    // Check if tag name is valid
+    // If not, treat '<' as plain text and don't consume the rest
+    if (!is_valid_html_tag(tag_name)) {
+        // Reset position to just after '<'
+        pos_ = begin + 1;
+        current_pos_.column = start.column + 1;
+        current_pos_.offset = pos_;
+
+        // Return '<' as text
+        return Token{TokenType::Text, input_.substr(begin, 1), {start, current_pos_}};
+    }
 
     // Skip to end of tag
     bool self_closing = false;
