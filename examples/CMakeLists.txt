@@ -23,3 +23,9 @@ add_executable(example_plain_text
     plain_text_example.cpp
 )
 target_link_libraries(example_plain_text PRIVATE wikilib::wikilib)
+
+# Example: Extract pages from dump using index
+add_executable(example_extract_pages
+    extract_pages_example.cpp
+)
+target_link_libraries(example_extract_pages PRIVATE wikilib::wikilib)

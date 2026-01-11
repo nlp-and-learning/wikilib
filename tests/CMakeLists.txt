@@ -16,6 +16,7 @@ add_executable(wikilib_tests
     markup/test_heading.cpp
     markup/test_section_tree.cpp
     dump/test_index_chunker.cpp
+    dump/test_dump_path.cpp
     templates/test_template_parser.cpp
     templates/test_complex_templates.cpp
 )

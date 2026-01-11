@@ -66,6 +66,8 @@ target_sources(wikilib PRIVATE
     src/dump/page_handler.cpp
     src/dump/index_parser.cpp
     src/dump/index_chunker.cpp
+    src/dump/dump_path.cpp
+    src/dump/dump_reader.cpp
 
     # Output formats
     src/output/plain_text.cpp
