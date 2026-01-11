@@ -90,6 +90,8 @@ target_link_libraries(wikilib
         ${BZIP2_LIBRARIES}
     PRIVATE
         pugixml::pugixml
+        ICU::uc
+        ICU::i18n
 )
 
 # ============================================================================
