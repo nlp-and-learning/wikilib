@@ -214,3 +214,189 @@ TEST_F(TokenizerTest, LooksLikeWikitext) {
     EXPECT_FALSE(looks_like_wikitext("Plain text"));
     EXPECT_FALSE(looks_like_wikitext("No markup here"));
 }
+
+// ============================================================================
+// NoWiki and Comment interaction tests
+// Based on z_innego_projektu/test/CommentTest.cpp and NowikiTest.cpp
+// ============================================================================
+
+// Helper to convert tokens to string (simulating preparse()->str())
+std::string tokens_to_string(const std::vector<Token>& tokens) {
+    std::string result;
+    for (const auto& t : tokens) {
+        if (t.type == TokenType::EndOfInput) break;
+        if (t.type == TokenType::HtmlComment) continue;  // Comments are stripped
+        if (t.type == TokenType::NoWiki) {
+            result += t.text;  // NoWiki content is literal
+        } else {
+            result += std::string(t.text);
+        }
+    }
+    return result;
+}
+
+// --- Comment tests ---
+
+TEST_F(TokenizerTest, Comment_HideComments) {
+    // "This is<!--comment 1--> simple <!--comment 2-->text" -> "This is simple text"
+    auto tokens = tokenize("This is<!--comment 1--> simple <!--comment 2-->text");
+    std::string result = tokens_to_string(tokens);
+    EXPECT_EQ(result, "This is simple text");
+}
+
+TEST_F(TokenizerTest, Comment_AtEnd) {
+    // "This is simple text<!--comment" -> "This is simple text"
+    // Unclosed comment consumes rest of input
+    auto tokens = tokenize("This is simple text<!--comment");
+    std::string result = tokens_to_string(tokens);
+    EXPECT_EQ(result, "This is simple text");
+}
+
+TEST_F(TokenizerTest, Comment_AtEnd2) {
+    // "This is simple --> text<!--comment" -> "This is simple --> text"
+    // Standalone --> before any <!-- is just text
+    auto tokens = tokenize("This is simple --> text<!--comment");
+    std::string result = tokens_to_string(tokens);
+    EXPECT_EQ(result, "This is simple --> text");
+}
+
+TEST_F(TokenizerTest, Comment_InsideNowiki) {
+    // "<nowiki><!--comment--></nowiki>" preserves comment as text
+    auto tokens = tokenize("<nowiki><!--comment--></nowiki>");
+    std::string result = tokens_to_string(tokens);
+    EXPECT_EQ(result, "<!--comment-->");
+}
+
+TEST_F(TokenizerTest, Comment_InsideNowikiWithText) {
+    // "This is <nowiki><!--comment--></nowiki> text" -> "This is <!--comment--> text"
+    auto tokens = tokenize("This is <nowiki><!--comment--></nowiki> text");
+    std::string result = tokens_to_string(tokens);
+    EXPECT_EQ(result, "This is <!--comment--> text");
+}
+
+TEST_F(TokenizerTest, Comment_NowikiInsideComment) {
+    // "This is <!--comment <nowiki> abc <nowiki> --> text" -> "This is  text"
+    // <nowiki> inside comment is ignored, comment ends at first -->
+    auto tokens = tokenize("This is <!--comment <nowiki> abc <nowiki> --> text");
+    std::string result = tokens_to_string(tokens);
+    EXPECT_EQ(result, "This is  text");
+}
+
+// --- NoWiki tests ---
+
+TEST_F(TokenizerTest, NoWiki_CommentInsideNowiki) {
+    // "<nowiki><!-- comment--></nowiki>" -> "<!-- comment-->"
+    auto tokens = tokenize("<nowiki><!-- comment--></nowiki>");
+    std::string result = tokens_to_string(tokens);
+    EXPECT_EQ(result, "<!-- comment-->");
+}
+
+TEST_F(TokenizerTest, NoWiki_NotClosed) {
+    // "<nowiki><!-- comment--><nowiki>" -> unclosed nowiki, content until end
+    // When <nowiki> is not closed, tokenizer should treat it as text
+    auto tokens = tokenize("<nowiki><!-- comment--><nowiki>");
+
+    // Check that we have a NoWiki token with content up to end
+    bool found_nowiki = false;
+    for (const auto& t : tokens) {
+        if (t.type == TokenType::NoWiki) {
+            found_nowiki = true;
+            // Content should include everything until EOF (no closing tag found)
+            EXPECT_EQ(t.text, "<!-- comment--><nowiki>");
+        }
+    }
+    EXPECT_TRUE(found_nowiki);
+}
+
+TEST_F(TokenizerTest, NoWiki_SecondOpen) {
+    // "<nowiki><!-- comment--><nowiki></nowiki>" -> "<!-- comment--><nowiki>"
+    // First <nowiki> is closed by first </nowiki>, second <nowiki> is included as text
+    auto tokens = tokenize("<nowiki><!-- comment--><nowiki></nowiki>");
+    std::string result = tokens_to_string(tokens);
+    EXPECT_EQ(result, "<!-- comment--><nowiki>");
+}
+
+TEST_F(TokenizerTest, NoWiki_Multi) {
+    // "abc<nowiki>a</nowiki><nowiki>a</nowiki>b<nowiki>c</nowiki><nowiki>d"
+    // Multiple nowiki blocks, last one unclosed
+    auto tokens = tokenize("abc<nowiki>a</nowiki><nowiki>a</nowiki>b<nowiki>c</nowiki><nowiki>d");
+    std::string result = tokens_to_string(tokens);
+    // Last <nowiki>d has no closing tag, so content is "d" until EOF
+    EXPECT_EQ(result, "abcaabcd");
+}
+
+TEST_F(TokenizerTest, NoWiki_StartPlusNowiki) {
+    // "abc<nowiki>a</nowiki>" -> "abca"
+    auto tokens = tokenize("abc<nowiki>a</nowiki>");
+    std::string result = tokens_to_string(tokens);
+    EXPECT_EQ(result, "abca");
+}
+
+TEST_F(TokenizerTest, NoWiki_Templates) {
+    // "{{name|a|b}}<nowiki>{{name|a|b}}</nowiki>"
+    // First template is parsed as template, second is literal text in nowiki
+    auto tokens = tokenize("{{name|a|b}}<nowiki>{{name|a|b}}</nowiki>");
+
+    // Check that we have both a template and nowiki
+    bool found_template = false;
+    bool found_nowiki = false;
+    std::string nowiki_content;
+
+    for (const auto& t : tokens) {
+        if (t.type == TokenType::TemplateOpen) found_template = true;
+        if (t.type == TokenType::NoWiki) {
+            found_nowiki = true;
+            nowiki_content = std::string(t.text);
+        }
+    }
+
+    EXPECT_TRUE(found_template);
+    EXPECT_TRUE(found_nowiki);
+    EXPECT_EQ(nowiki_content, "{{name|a|b}}");
+}
+
+// --- Edge cases ---
+
+TEST_F(TokenizerTest, NoWiki_SelfClosing) {
+    // "<nowiki/>" is self-closing, no content
+    auto tokens = tokenize("abc<nowiki/>def");
+    std::string result = tokens_to_string(tokens);
+    EXPECT_EQ(result, "abcdef");
+}
+
+TEST_F(TokenizerTest, Comment_PreserveMode) {
+    // With preserve_comments = true, comment should appear as token
+    Tokenizer tok("text<!-- comment -->more", {.preserve_comments = true});
+    auto tokens = tok.tokenize_all();
+
+    bool found_comment = false;
+    std::string comment_text;
+    for (const auto& t : tokens) {
+        if (t.type == TokenType::HtmlComment) {
+            found_comment = true;
+            comment_text = std::string(t.text);
+        }
+    }
+
+    EXPECT_TRUE(found_comment);
+    EXPECT_EQ(comment_text, "<!-- comment -->");
+}
+
+TEST_F(TokenizerTest, Comment_PartInsideNowiki) {
+    // "This is <nowiki><!--comm</nowiki>ent--> text"
+    // Opening <!-- is inside nowiki so it's not a comment start
+    // After </nowiki>, "ent-->" is just text (no matching <!--)
+    auto tokens = tokenize("This is <nowiki><!--comm</nowiki>ent--> text");
+    std::string result = tokens_to_string(tokens);
+    EXPECT_EQ(result, "This is <!--comment--> text");
+}
+
+TEST_F(TokenizerTest, NoWiki_InsideCommentPart) {
+    // "This is <!--comm<nowiki>>ent--></nowiki text"
+    // <!-- starts comment, looks for --> which is at "ent-->"
+    // So comment content is "comm<nowiki>>ent"
+    // Then "</nowiki text" remains
+    auto tokens = tokenize("This is <!--comm<nowiki>>ent--></nowiki text");
+    std::string result = tokens_to_string(tokens);
+    EXPECT_EQ(result, "This is </nowiki text");
+}
