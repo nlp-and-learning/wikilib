@@ -239,13 +239,26 @@ private:
 [[nodiscard]] std::string tokens_to_plain_text(std::span<const Token> tokens);
 
 /**
- * @brief Strip HTML comments and unwrap nowiki tags from text
+ * @brief Strip HTML comments from text (first pass preprocessing)
  *
- * Tokenizes the input, removes comment tokens, and converts nowiki content
- * to literal text. Other tokens are preserved as their raw text.
+ * Removes HTML comments (<!--...-->) while respecting nowiki tags.
+ * Comments inside <nowiki>...</nowiki> are preserved.
+ * The nowiki tags themselves are preserved in the output.
  *
  * @param input The wikitext to process
- * @return Text with comments stripped and nowiki unwrapped
+ * @return Text with comments removed, nowiki tags preserved
+ */
+[[nodiscard]] std::string strip_comments(std::string_view input);
+
+/**
+ * @brief Strip HTML comments, HTML tags, and unwrap nowiki tags from text
+ *
+ * Two-pass processing:
+ * 1. First removes comments (respecting nowiki protection)
+ * 2. Then tokenizes and strips HTML tags, unwraps nowiki content
+ *
+ * @param input The wikitext to process
+ * @return Text with comments and tags stripped, nowiki unwrapped
  */
 [[nodiscard]] std::string strip_comments_and_nowiki(std::string_view input);
 

@@ -826,18 +826,67 @@ std::string tokens_to_plain_text(std::span<const Token> tokens) {
     return result;
 }
 
-std::string strip_comments_and_nowiki(std::string_view input) {
-    Tokenizer tok(input, {.preserve_comments = true});
-    auto tokens = tok.tokenize_all();
-
+std::string strip_comments(std::string_view input) {
     std::string result;
     result.reserve(input.size());
 
+    size_t pos = 0;
+    while (pos < input.size()) {
+        // Check for nowiki - copy literally including tags
+        if (input.substr(pos).starts_with("<nowiki>")) {
+            size_t end = input.find("</nowiki>", pos + 8);
+            if (end != std::string_view::npos) {
+                // Copy <nowiki>...</nowiki> literally
+                result += input.substr(pos, end + 9 - pos);
+                pos = end + 9;
+            } else {
+                // Unclosed nowiki - copy rest literally
+                result += input.substr(pos);
+                break;
+            }
+        }
+        // Check for self-closing nowiki
+        else if (input.substr(pos).starts_with("<nowiki/>")) {
+            result += "<nowiki/>";
+            pos += 9;
+        }
+        // Check for comment - skip it
+        else if (input.substr(pos).starts_with("<!--")) {
+            size_t end = input.find("-->", pos + 4);
+            if (end != std::string_view::npos) {
+                pos = end + 3;  // Skip comment
+            } else {
+                // Unclosed comment - skip rest
+                break;
+            }
+        }
+        // Regular character - copy it
+        else {
+            result += input[pos];
+            pos++;
+        }
+    }
+    return result;
+}
+
+std::string strip_comments_and_nowiki(std::string_view input) {
+    // First pass: strip comments (respecting nowiki)
+    std::string no_comments = strip_comments(input);
+
+    // Second pass: tokenize and strip HTML tags, unwrap nowiki
+    Tokenizer tok(no_comments, {.preserve_comments = true});
+    auto tokens = tok.tokenize_all();
+
+    std::string result;
+    result.reserve(no_comments.size());
+
     for (const auto& t : tokens) {
         if (t.type == TokenType::EndOfInput) break;
-        if (t.type == TokenType::HtmlComment) continue;  // Comments are stripped
+        if (t.type == TokenType::HtmlComment) continue;  // Should not occur after first pass
+        if (t.type == TokenType::HtmlTagOpen) continue;  // HTML tags are stripped
+        if (t.type == TokenType::HtmlTagClose) continue;
         if (t.type == TokenType::NoWiki) {
-            result += t.text;  // NoWiki content is literal
+            result += t.text;  // NoWiki content is literal (protected from interpretation)
         } else {
             result += std::string(t.text);
         }

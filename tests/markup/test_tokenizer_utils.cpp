@@ -138,3 +138,47 @@ TEST_F(TokenizerUtilsTest, PlainText_Complex) {
     std::string expected = " Heading \nBold and italic with linktext and template.";
     EXPECT_EQ(to_plain_text(input), expected);
 }
+
+// ============================================================================
+// strip_comments_and_nowiki tests
+// ============================================================================
+
+TEST_F(TokenizerUtilsTest, Strip_BasicTag) {
+    EXPECT_EQ(strip_comments_and_nowiki("<span>text</span>"), "text");
+}
+
+TEST_F(TokenizerUtilsTest, Strip_CommentInsideText) {
+    // Comment inside text is removed
+    EXPECT_EQ(strip_comments_and_nowiki("<span>te<!-- comment -->xt</span>"), "text");
+}
+
+TEST_F(TokenizerUtilsTest, Strip_CommentInsideTagName) {
+    // Comment has higher priority than tag name parsing
+    // <sp<!-- comment -->an> becomes <span> after comment removal
+    EXPECT_EQ(strip_comments_and_nowiki("<sp<!-- comment -->an>text</span>"), "text");
+}
+
+TEST_F(TokenizerUtilsTest, Strip_CommentBetweenLtAndSlash) {
+    // <<!-- comment -->/span> becomes </span> after comment removal
+    EXPECT_EQ(strip_comments_and_nowiki("<span>text<<!-- comment -->/span>"), "text");
+}
+
+TEST_F(TokenizerUtilsTest, Strip_ClosingTagWithoutOpening) {
+    // Closing tag without opening is still stripped
+    EXPECT_EQ(strip_comments_and_nowiki("text</span>"), "text");
+}
+
+TEST_F(TokenizerUtilsTest, Strip_OpeningTagWithoutClosing) {
+    // Opening tag without closing is still stripped
+    EXPECT_EQ(strip_comments_and_nowiki("<span>text"), "text");
+}
+
+TEST_F(TokenizerUtilsTest, Strip_NowikiProtectsTag) {
+    // <span> inside nowiki is protected, </span> outside is stripped
+    EXPECT_EQ(strip_comments_and_nowiki("<nowiki><span></nowiki>text</span>"), "<span>text");
+}
+
+TEST_F(TokenizerUtilsTest, Strip_NowikiProtectsCommentSyntax) {
+    // Content inside nowiki is literal, including comment-like syntax
+    EXPECT_EQ(strip_comments_and_nowiki("<span><nowiki>text<<!-- comment -->/span></nowiki>"), "text<<!-- comment -->/span>");
+}
