@@ -11,6 +11,7 @@ add_executable(wikilib_tests
     markup/test_tokenizer.cpp
     markup/test_parser.cpp
     markup/test_ast.cpp
+    markup/test_heading.cpp
     templates/test_template_parser.cpp
 )
 
