@@ -825,4 +825,23 @@ std::string tokens_to_plain_text(std::span<const Token> tokens) {
     return result;
 }
 
+std::string remove_comments(std::string_view input) {
+    Tokenizer tok(input, {.preserve_comments = true});
+    auto tokens = tok.tokenize_all();
+
+    std::string result;
+    result.reserve(input.size());
+
+    for (const auto& t : tokens) {
+        if (t.type == TokenType::EndOfInput) break;
+        if (t.type == TokenType::HtmlComment) continue;  // Comments are stripped
+        if (t.type == TokenType::NoWiki) {
+            result += t.text;  // NoWiki content is literal
+        } else {
+            result += std::string(t.text);
+        }
+    }
+    return result;
+}
+
 } // namespace wikilib::markup

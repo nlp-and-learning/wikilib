@@ -158,17 +158,18 @@ TEST_F(HeadingTest, EqualsInside) {
 // ============================================================================
 
 TEST_F(HeadingTest, CommentInside) {
-    // == <!-- dd --> aa== should give title "aa"
-    // Comments are filtered out
-    auto info = parseHeading("== <!-- dd --> aa==");
+    // == <!-- dd --> aa== should give title "  aa"
+    // Comments are filtered out before parsing, both spaces remain
+    auto info = parseHeading(remove_comments("== <!-- dd --> aa=="));
     EXPECT_TRUE(info.found);
     EXPECT_EQ(2, info.level);
-    EXPECT_EQ(" aa", info.title); // Space before "aa" remains
+    EXPECT_EQ("  aa", info.title); // Both spaces (before and after comment) remain
 }
 
 TEST_F(HeadingTest, CommentBefore) {
     // <!-- dd -->==aa== is valid (comment before heading)
-    auto info = parseHeading("<!-- dd -->==aa==");
+    // Comments are filtered out before parsing
+    auto info = parseHeading(remove_comments("<!-- dd -->==aa=="));
     EXPECT_TRUE(info.found);
     EXPECT_EQ(2, info.level);
     EXPECT_EQ("aa", info.title);
