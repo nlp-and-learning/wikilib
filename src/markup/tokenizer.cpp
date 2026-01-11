@@ -825,7 +825,7 @@ std::string tokens_to_plain_text(std::span<const Token> tokens) {
     return result;
 }
 
-std::string remove_comments(std::string_view input) {
+std::string strip_comments_and_nowiki(std::string_view input) {
     Tokenizer tok(input, {.preserve_comments = true});
     auto tokens = tok.tokenize_all();
 
