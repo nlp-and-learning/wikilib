@@ -13,6 +13,7 @@
 #include <utility>
 #include "wikilib/core/types.h"
 #include "wikilib/dump/bz2_stream.h"
+#include "wikilib/dump/bz2_range_reader.h"
 
 namespace wikilib::dump {
 
@@ -71,6 +72,13 @@ public:
      * @brief Create reader from string (for testing)
      */
     static XmlReader from_string(std::string_view xml);
+
+    /**
+     * Read a complete indexed XML chunk incrementally. Accepts a page fragment,
+     * an initial mediawiki root, or a final root closing tag. Only the mediawiki
+     * boundary is implicit; incomplete page elements remain errors.
+     */
+    static XmlReader from_chunk(std::unique_ptr<Bz2RangeReader> stream);
 
     ~XmlReader();
 

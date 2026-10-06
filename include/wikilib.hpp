@@ -22,6 +22,8 @@
 #include "wikilib/templates/template_parser.h"
 
 #include "wikilib/dump/bz2_stream.h"
+#include "wikilib/dump/bz2_range_reader.h"
+#include "wikilib/dump/dump_reader.h"
 #include "wikilib/dump/page_handler.h"
 #include "wikilib/dump/xml_reader.h"
 

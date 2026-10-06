@@ -33,6 +33,7 @@ std::optional<std::string_view> XmlEvent::get_attribute(std::string_view attr_na
 
 struct XmlReader::Impl {
     std::unique_ptr<Bz2Stream> bz2_stream;
+    std::unique_ptr<Bz2RangeReader> range_stream;
     std::unique_ptr<std::istream> plain_stream;
     std::string buffer;
     size_t buffer_pos = 0;
@@ -42,6 +43,9 @@ struct XmlReader::Impl {
     bool document_ended = false;
     bool root_seen = false;
     bool pending_end_element = false;
+    bool chunk_mode = false;
+    bool chunk_has_page = false;
+    bool chunk_has_root = false;
     std::string error_message;
     uint64_t bytes_processed = 0;
 
@@ -73,7 +77,20 @@ bool XmlReader::Impl::refill_buffer() {
     buffer.clear();
     buffer_pos = 0;
 
-    if (bz2_stream) {
+    if (range_stream) {
+        const auto count = range_stream->read(read_buffer, BUFFER_SIZE);
+        if (!range_stream->error().empty()) {
+            error_message = range_stream->error();
+            at_eof = true;
+            return false;
+        }
+        if (count > 0) {
+            buffer.assign(read_buffer, count);
+            bytes_processed += count;
+            return true;
+        }
+        at_eof = range_stream->eof();
+    } else if (bz2_stream) {
         size_t n = bz2_stream->read(read_buffer, BUFFER_SIZE);
         if (!bz2_stream->error().empty()) {
             error_message = std::string(bz2_stream->error());
@@ -357,6 +374,21 @@ XmlReader XmlReader::from_string(std::string_view xml) {
 
 XmlReader::~XmlReader() = default;
 
+XmlReader XmlReader::from_chunk(std::unique_ptr<Bz2RangeReader> stream) {
+    XmlReader reader("");
+    reader.impl_ = std::make_unique<Impl>();
+    reader.impl_->range_stream = std::move(stream);
+    reader.impl_->chunk_mode = true;
+    reader.impl_->root_seen = true;
+    reader.impl_->element_stack.push("mediawiki");
+    if (!reader.impl_->range_stream || !reader.impl_->range_stream->is_open()) {
+        reader.impl_->error_message = reader.impl_->range_stream
+                                     ? std::string(reader.impl_->range_stream->error()) : "Null BZ2 range reader";
+        if (reader.impl_->error_message.empty()) reader.impl_->error_message = "Invalid BZ2 range reader";
+    }
+    return reader;
+}
+
 XmlReader::XmlReader(XmlReader &&) noexcept = default;
 XmlReader &XmlReader::operator=(XmlReader &&) noexcept = default;
 
@@ -391,10 +423,21 @@ std::optional<XmlEvent> XmlReader::next() {
     }
 
     while (true) {
+        // Chunk separators can be arbitrarily long; discard them incrementally.
+        // Whitespace within pages remains part of the XML event stream.
+        if (impl_->chunk_mode && impl_->element_stack.size() == 1 &&
+            impl_->element_stack.top() == "mediawiki")
+            impl_->skip_whitespace();
         const char first = impl_->peek_char();
         if (!impl_->error_message.empty())
             return fail({});
         if (first == '\0') {
+            if (impl_->chunk_mode && impl_->element_stack.size() == 1 &&
+                impl_->element_stack.top() == "mediawiki") {
+                impl_->element_stack.pop();
+                impl_->current_element_name = "mediawiki";
+                return XmlEvent{XmlEventType::EndElement, impl_->current_element_name, {}, {}};
+            }
             if (!impl_->element_stack.empty())
                 return fail("Unexpected EOF in XML element");
             if (!impl_->root_seen)
@@ -471,6 +514,14 @@ std::optional<XmlEvent> XmlReader::next() {
         impl_->current_element_name = impl_->read_name();
         if (impl_->current_element_name.empty())
             return fail("Missing XML element name");
+        if (impl_->chunk_mode && impl_->current_element_name == "mediawiki") {
+            if (impl_->chunk_has_root || impl_->chunk_has_page || impl_->element_stack.size() != 1)
+                return fail("Unexpected mediawiki root in XML chunk");
+            impl_->element_stack.pop();
+            impl_->root_seen = false;
+            impl_->chunk_has_root = true;
+        }
+        if (impl_->chunk_mode && impl_->current_element_name == "page") impl_->chunk_has_page = true;
         if (impl_->element_stack.empty()) {
             if (impl_->root_seen)
                 return fail("Multiple XML root elements");

@@ -14,6 +14,7 @@
 #include <vector>
 #include "wikilib/dump/dump_path.h"
 #include "wikilib/dump/index_chunker.h"
+#include "wikilib/dump/page_handler.h"
 
 namespace wikilib::dump {
 
@@ -44,7 +45,8 @@ struct ExtractedPage {
  * @brief Efficient reader for Wikimedia dump files
  *
  * Uses index file to enable random access to compressed dump.
- * Indexed extraction buffers a complete compressed chunk and its XML.
+ * extract_page(s) buffers complete XML chunks. process_chunk/process_indexed
+ * deliver pages incrementally with fixed-size decompression buffers.
  *
  * Example usage:
  * @code
@@ -134,6 +136,8 @@ public:
 
     /**
      * @brief Decompress a chunk by index
+     * @note Accumulates the entire decompressed XML; use process_chunk() to
+     * process pages incrementally.
      * @param chunk_idx Index of chunk (0 to chunk_count()-1)
      * @return Decompressed XML content
      */
@@ -141,6 +145,7 @@ public:
 
     /**
      * @brief Decompress a chunk by offset range
+     * @note Accumulates the entire decompressed content in memory.
      * @param start_offset Start offset in compressed file
      * @param length Length in compressed file
      * @return Decompressed content
@@ -148,13 +153,38 @@ public:
     [[nodiscard]] std::string decompress_chunk(uint64_t start_offset, uint64_t length);
 
     /**
-     * @brief Progress info for process_all
+     * @brief Progress info for dump processing
      */
     struct ProcessProgress {
         size_t pages_processed = 0;
-        uint64_t bytes_compressed = 0;   // Bytes read from compressed file
-        uint64_t bytes_total = 0;        // Total compressed file size
+        uint64_t bytes_compressed = 0;   // Bytes fetched, including read-ahead
+        uint64_t bytes_total = 0;        // Compressed bytes covered by this operation
+        size_t chunks_processed = 0;
     };
+
+    using ProgressCallback = std::function<void(const ProcessProgress&)>;
+
+    /**
+     * Process pages in one indexed range without loading an index or full XML.
+     * Retains the last revision in dump order. Nonempty chunk.entries are
+     * checked against each page's title, ID, and order; empty entries disable
+     * that check. Progress byte counts are relative to the selected range.
+     * Returns true on completion, false on cancellation or error. An empty
+     * error() distinguishes cancellation. Previously delivered pages remain
+     * delivered if a later error occurs. Callback page references are valid
+     * only during the callback.
+     */
+    bool process_chunk(const IndexChunk& chunk, PageCallback callback,
+                       ProgressCallback progress = nullptr);
+
+    /**
+     * Read index chunks sequentially and process their pages incrementally.
+     * Does not build or modify the in-memory index. Working memory includes
+     * fixed buffers, the current page, and the current chunk's index entries.
+     * Progress byte counts cover indexed ranges (exclude a preceding header).
+     * Completion, cancellation, and error semantics match process_chunk().
+     */
+    bool process_indexed(PageCallback callback, ProgressCallback progress = nullptr);
 
     /**
      * @brief Process all pages in dump (streaming)

@@ -88,22 +88,38 @@ index chunk -> bounded BZ2 range -> decompression buffers -> XML parser
             -> page -> callback
 ```
 
-- [ ] Add a reader for a compressed range `[start_offset, end_offset)` that
+- [x] Add a reader for a compressed range `[start_offset, end_offset)` that
   decompresses incrementally using fixed-size buffers.
-- [ ] Connect the range reader to `XmlReader` and `PageHandler`.
-- [ ] Add callback-based APIs, provisionally named `process_chunk(chunk,
+- [x] Connect the range reader to `XmlReader` and `PageHandler`.
+- [x] Add callback-based APIs, provisionally named `process_chunk(chunk,
   callback)` and `process_indexed(callback)`; settle signatures during
   implementation.
-- [ ] Iterate over index chunks without constructing a full in-memory page map.
-- [ ] Support callback cancellation, progress reporting, and explicit errors.
-- [ ] Keep `decompress_chunk()` as a convenience API returning complete content,
+- [x] Iterate over index chunks without constructing a full in-memory page map.
+- [x] Support callback cancellation, progress reporting, and explicit errors.
+- [x] Keep `decompress_chunk()` as a convenience API returning complete content,
   and document its memory usage accurately.
-- [ ] Add integration tests for the first and last chunks, range boundaries,
+- [x] Add integration tests for the first and last chunks, range boundaries,
   cancellation, and corrupted chunks.
 
 **Acceptance criteria:** Pages reach the callback without accumulating the
 entire decompressed chunk. Working memory depends primarily on decompression
 buffers and the current page, rather than the whole chunk, index, or dump.
+
+**Completed:** Added `Bz2RangeReader`, `XmlReader::from_chunk()`, and
+`DumpReader::process_chunk()` / `process_indexed()` with page callbacks,
+cancellation, progress, and explicit errors. The range reader uses fixed 64 KiB
+input buffers, supports concatenated streams, and never reads beyond the selected
+range. Indexed processing retains the last revision and validates each chunk's
+page titles, IDs, and order against its index entries. It streams TXT or TXT.BZ2
+indexes without building or changing the full page map. Working memory includes
+the current page, XML metadata, buffers, and the current chunk's index entries;
+it does not accumulate full chunk XML. `decompress_chunk()` now uses the same
+range reader while retaining its whole-string result. The README includes usage
+and memory/error semantics. Added 23 tests, including delivery before the whole
+chunk is decompressed, first/middle/last boundaries, cancellation, corruption,
+large page text, and periodic progress. The library and examples build; the full
+suite has 456 passing tests and 8 skipped tests. All 23 new tests pass ASan,
+UBSan, and LSan checks.
 
 ## 5. Unify processing paths and improve performance
 

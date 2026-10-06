@@ -5,14 +5,12 @@
 
 #include "wikilib/dump/dump_reader.h"
 #include <algorithm>
-#include <bzlib.h>
 #include <chrono>
 #include <cstring>
 #include <fstream>
 #include <limits>
 #include <pugixml.hpp>
 #include <stdexcept>
-#include <sys/stat.h>
 #include "wikilib/dump/bz2_line_reader.h"
 #include "wikilib/dump/bz2_stream.h"
 #include "wikilib/dump/index_chunker.h"
@@ -67,96 +65,91 @@ struct DumpReader::Impl {
     std::unordered_map<std::string, IndexedPage> page_map;
     std::vector<uint64_t> chunk_offsets; // Start offset for each chunk
 
-    // File handle for dump
-    FILE *dump_file = nullptr;
-
     explicit Impl(const DumpPath &p) : path(p) {
     }
 
-    ~Impl() {
-        if (dump_file) {
-            fclose(dump_file);
-        }
-    }
-
-    // Open dump file
-    bool open_dump();
-
     // Buffered decompression of a complete range
     std::string decompress_range(uint64_t start, uint64_t length);
+    bool process_range(const IndexChunk &chunk, const PageCallback &callback,
+                       ProcessProgress &progress, const ProgressCallback &report,
+                       std::chrono::steady_clock::time_point &last_report);
+    std::filesystem::path index_path() const;
 };
 
-bool DumpReader::Impl::open_dump() {
-    if (dump_file) {
-        return true;
+std::filesystem::path DumpReader::Impl::index_path() const {
+    auto index = path.index_path();
+    if (!std::filesystem::exists(index)) {
+        auto plain = index;
+        plain.replace_extension();
+        if (std::filesystem::exists(plain)) return plain;
     }
-
-    auto dump_path = path.dump_path();
-    dump_file = fopen(dump_path.string().c_str(), "rb");
-    if (!dump_file) {
-        error_message = "Failed to open dump file: " + dump_path.string();
-        return false;
-    }
-    return true;
+    return index;
 }
 
 std::string DumpReader::Impl::decompress_range(uint64_t start, uint64_t length) {
-    const uint64_t size = path.dump_size();
-    if (length == 0 || start >= size || length > size - start ||
-        start > static_cast<uint64_t>(std::numeric_limits<long>::max()) ||
-        length > std::numeric_limits<unsigned int>::max()) {
-        error_message = "Invalid or unsupported compressed range";
+    if (length == 0 || length > std::numeric_limits<uint64_t>::max() - start) {
+        error_message = "Invalid compressed range";
         return {};
     }
-    if (!open_dump()) {
-        return {};
-    }
-
-    // Seek to start position
-    if (fseek(dump_file, static_cast<long>(start), SEEK_SET) != 0) {
-        error_message = "Seek failed";
-        return {};
-    }
-
-    // Read compressed data
-    std::vector<char> compressed(length);
-    size_t bytes_read = fread(compressed.data(), 1, length, dump_file);
-    if (bytes_read != length) {
-        error_message = "Failed to read compressed data";
-        return {};
-    }
-
-    // Buffered decompression with adaptive output capacity
-    // Start with reasonable estimate and grow if needed
+    Bz2RangeReader range(path.dump_path().string(), start, start + length);
     std::string result;
-    unsigned int dest_len = static_cast<unsigned int>(std::min<uint64_t>(length * 15, 1024 * 1024));
-    result.resize(dest_len);
-
-    int ret = BZ2_bzBuffToBuffDecompress(result.data(), &dest_len, compressed.data(), static_cast<unsigned int>(length),
-                                         0, // small
-                                         0 // verbosity
-    );
-
-    // If buffer too small, retry with larger buffer
-    while (ret == BZ_OUTBUFF_FULL) {
-        if (result.size() == std::numeric_limits<unsigned int>::max()) {
-            error_message = "Decompressed chunk exceeds BZ2 buffer API limit";
-            return {};
-        }
-        dest_len = static_cast<unsigned int>(
-                std::min<uint64_t>(static_cast<uint64_t>(result.size()) * 2, std::numeric_limits<unsigned int>::max()));
-        result.resize(dest_len);
-        ret = BZ2_bzBuffToBuffDecompress(result.data(), &dest_len, compressed.data(), static_cast<unsigned int>(length),
-                                         0, 0);
-    }
-
-    if (ret != BZ_OK) {
-        error_message = "BZ2 decompression failed";
+    char buffer[64 * 1024];
+    while (const auto count = range.read(buffer, sizeof(buffer))) result.append(buffer, count);
+    if (!range.error().empty()) {
+        error_message = range.error();
         return {};
     }
-
-    result.resize(dest_len);
     return result;
+}
+
+bool DumpReader::Impl::process_range(const IndexChunk &chunk, const PageCallback &callback,
+                                    ProcessProgress &progress, const ProgressCallback &report,
+                                    std::chrono::steady_clock::time_point &last_report) {
+    for (const auto &entry : chunk.entries) {
+        if (entry.offset != chunk.start_offset) {
+            error_message = "Index entry does not match chunk offset";
+            return false;
+        }
+    }
+    auto range = std::make_unique<Bz2RangeReader>(path.dump_path().string(), chunk.start_offset, chunk.end_offset);
+    if (!range->is_open()) {
+        error_message = range->error();
+        return false;
+    }
+    const auto *range_info = range.get();
+    const uint64_t bytes_before = progress.bytes_compressed;
+    PageHandler handler(std::make_unique<XmlReader>(XmlReader::from_chunk(std::move(range))));
+    size_t pages_in_chunk = 0;
+    PageFilter filter;
+    while (auto page = handler.next_page(filter)) {
+        progress.bytes_compressed = bytes_before + range_info->compressed_bytes_read();
+        if (!chunk.entries.empty() &&
+            (pages_in_chunk >= chunk.entries.size() ||
+             page->info.title != chunk.entries[pages_in_chunk].title ||
+             page->info.id != chunk.entries[pages_in_chunk].page_id)) {
+            error_message = "XML page does not match index entry";
+            return false;
+        }
+        ++pages_in_chunk;
+        ++progress.pages_processed;
+        if (!callback(*page)) return false;
+        const auto now = std::chrono::steady_clock::now();
+        if (report && (progress.pages_processed % 1000 == 0 || now - last_report >= std::chrono::seconds(2))) {
+            report(progress);
+            last_report = now;
+        }
+    }
+    progress.bytes_compressed = bytes_before + range_info->compressed_bytes_read();
+    if (!handler.error().empty()) {
+        error_message = handler.error();
+        return false;
+    }
+    if (!chunk.entries.empty() && pages_in_chunk != chunk.entries.size()) {
+        error_message = "Indexed page missing from XML chunk";
+        return false;
+    }
+    ++progress.chunks_processed;
+    return true;
 }
 
 DumpReader::DumpReader(const DumpPath &path) : impl_(std::make_unique<Impl>(path)) {
@@ -172,19 +165,8 @@ void DumpReader::load_index(std::function<void(size_t)> progress_callback) {
     impl_->index_is_loaded = false;
     impl_->page_map.clear();
     impl_->chunk_offsets.clear();
-    if (impl_->dump_file) {
-        fclose(impl_->dump_file);
-        impl_->dump_file = nullptr;
-    }
-
     try {
-        auto index_path = impl_->path.index_path();
-        if (!std::filesystem::exists(index_path)) {
-            auto plain_index = index_path;
-            plain_index.replace_extension();
-            if (std::filesystem::exists(plain_index))
-                index_path = std::move(plain_index);
-        }
+        auto index_path = impl_->index_path();
         const uint64_t dump_size = impl_->path.dump_size();
         if (dump_size == 0)
             throw std::runtime_error("Dump file not found or empty");
@@ -381,6 +363,59 @@ std::string DumpReader::decompress_chunk(uint64_t start_offset, uint64_t length)
     } catch (const std::exception &error) {
         impl_->error_message = error.what();
         return {};
+    }
+}
+
+bool DumpReader::process_chunk(const IndexChunk &chunk, PageCallback callback, ProgressCallback report) {
+    impl_->error_message.clear();
+    ProcessProgress progress;
+    try {
+        if (!callback) throw std::invalid_argument("Page callback is required");
+        if (chunk.start_offset >= chunk.end_offset) throw std::invalid_argument("Invalid compressed range");
+        progress.bytes_total = chunk.end_offset - chunk.start_offset;
+        if (report) report(progress);
+        auto last_report = std::chrono::steady_clock::now();
+        const bool complete = impl_->process_range(chunk, callback, progress, report, last_report);
+        if (report) report(progress);
+        return complete;
+    } catch (const std::exception &error) {
+        impl_->error_message = error.what();
+        return false;
+    }
+}
+
+bool DumpReader::process_indexed(PageCallback callback, ProgressCallback report) {
+    impl_->error_message.clear();
+    ProcessProgress progress;
+    try {
+        if (!callback) throw std::invalid_argument("Page callback is required");
+        const auto dump_size = impl_->path.dump_size();
+        if (dump_size == 0) throw std::runtime_error("Dump file not found or empty");
+        auto chunker = IndexChunker::from_file(impl_->index_path().string(), dump_size, IndexLinePolicy::RejectMalformed);
+        IndexChunk chunk;
+        bool has_chunk = chunker.next_chunk(chunk);
+        if (!chunker.error().empty()) throw std::runtime_error(std::string(chunker.error()));
+        if (!has_chunk) throw std::runtime_error("No valid entries found in index file");
+        progress.bytes_total = dump_size - chunk.start_offset;
+        if (report) report(progress);
+        auto last_report = std::chrono::steady_clock::now();
+        while (has_chunk) {
+            if (!impl_->process_range(chunk, callback, progress, report, last_report)) {
+                if (report) report(progress);
+                return false;
+            }
+            has_chunk = chunker.next_chunk(chunk);
+        }
+        if (!chunker.error().empty()) {
+            impl_->error_message = chunker.error();
+            if (report) report(progress);
+            return false;
+        }
+        if (report) report(progress);
+        return true;
+    } catch (const std::exception &error) {
+        impl_->error_message = error.what();
+        return false;
     }
 }
 

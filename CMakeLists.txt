@@ -62,6 +62,7 @@ target_sources(wikilib PRIVATE
     # Dump processing
     src/dump/xml_reader.cpp
     src/dump/bz2_stream.cpp
+    src/dump/bz2_range_reader.cpp
     src/dump/bz2_line_reader.cpp
     src/dump/page_handler.cpp
     src/dump/index_parser.cpp
