@@ -23,6 +23,7 @@ add_executable(wikilib_tests
     dump/test_dump_reader.cpp
     dump/test_bz2_range_reader.cpp
     dump/test_indexed_streaming.cpp
+    dump/test_processing_paths.cpp
     dump/test_dump_path.cpp
     templates/test_template_parser.cpp
     templates/test_complex_templates.cpp

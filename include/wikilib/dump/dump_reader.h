@@ -45,8 +45,8 @@ struct ExtractedPage {
  * @brief Efficient reader for Wikimedia dump files
  *
  * Uses index file to enable random access to compressed dump.
- * extract_page(s) buffers complete XML chunks. process_chunk/process_indexed
- * deliver pages incrementally with fixed-size decompression buffers.
+ * Page processing and extraction parse XML incrementally with fixed-size
+ * decompression buffers. Batch extraction visits each selected chunk once.
  *
  * Example usage:
  * @code
@@ -128,7 +128,9 @@ public:
     /**
      * @brief Extract multiple pages efficiently
      *
-     * Groups pages by chunk for efficient extraction.
+     * Parses each selected chunk once, in increasing compressed offset order.
+     * Retains only requested results and the current page, using the last
+     * revision in dump order. A failing chunk publishes no extracted results.
      * Preserves input order and duplicates. Inspect error() for extraction
      * failures; a title absent from the index is a normal not-found result.
      */
@@ -189,8 +191,10 @@ public:
     /**
      * @brief Process all pages in dump (streaming)
      *
-     * Iterates through all chunks without loading entire index.
-     * Memory efficient for processing entire dump.
+     * Parses the complete XML dump without requiring an index. Uses the same
+     * page parser and last-revision selection as indexed processing.
+     * Inspect error() after processing; cancellation leaves it empty.
+     * Sequential processing leaves ProcessProgress::chunks_processed at zero.
      *
      * @param callback Called for each page (title, content). Return false to stop.
      */

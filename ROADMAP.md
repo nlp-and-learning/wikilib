@@ -125,17 +125,39 @@ UBSan, and LSan checks.
 
 Depends on stage 4.
 
-- [ ] Implement `process_all()` through the XML parser instead of detecting
+- [x] Implement `process_all()` through the XML parser instead of detecting
   `<page>` boundaries by line matching.
-- [ ] Parse each chunk only once in `extract_pages()`.
-- [ ] Process requested chunks in offset order to reduce file seeking while
+- [x] Parse each chunk only once in `extract_pages()`.
+- [x] Process requested chunks in offset order to reduce file seeking while
   preserving the requested result order.
-- [ ] Measure elapsed time, throughput, and peak memory on representative inputs.
-- [ ] Compare sequential and indexed processing results in integration tests.
+- [x] Measure elapsed time, throughput, and peak memory on representative inputs.
+- [x] Compare sequential and indexed processing results in integration tests.
 
 **Acceptance criteria:** Sequential and indexed processing return equivalent
 pages. Measurements confirm bounded memory for streaming processing and avoid
 repeated parsing of a chunk during batch extraction.
+
+**Completed:** `process_all()` now reads through `XmlReader` / `PageHandler`
+and uses the same last-revision selection as indexed processing. It preserves
+its existing callback signature and reports parsing, decompression, and callback
+failures through `error()`. Single and batch extraction use the streaming range
+pipeline; each selected chunk is parsed once in increasing offset order, while
+requested result order and duplicates are preserved. Results from an invalid
+chunk are not published. XML convenience helpers select the last revision and
+combine text/CDATA segments. Added 9 integration tests for processing-path
+agreement, cancellation/progress, failures, ordering, and corrupt chunk suffixes.
+The library and examples build; the full suite has 465 passing tests and 8
+skipped tests. All 37 processing/extraction regression tests pass ASan, UBSan,
+and LSan checks.
+
+Added an optional CMake benchmark target and a reproducible
+[benchmark report](benchmarks/README.md). On deterministic synthetic dumps,
+batch extraction of 128 pages was about 6.3 times faster than stage 4, with
+matching checksums. Increasing one chunk from 16.37 to 130.98 MiB XML increased
+indexed streaming peak RSS from 8.42 to 9.77 MiB; buffered processing increased
+from 56.71 to 422.66 MiB. Results include elapsed time and throughput across three
+runs. Real Wikimedia dump measurements remain a follow-up; synthetic results
+are evidence for these fixtures rather than general throughput guarantees.
 
 ## 6. Complete template expansion and prepare a release
 

@@ -11,6 +11,7 @@ project(wikilib
 # ============================================================================
 option(WIKILIB_BUILD_TESTS "Build unit tests" ON)
 option(WIKILIB_BUILD_EXAMPLES "Build example programs" ON)
+option(WIKILIB_BUILD_BENCHMARKS "Build local dump benchmarks" OFF)
 option(WIKILIB_BUILD_DOCS "Build documentation" OFF)
 option(WIKILIB_USE_SYSTEM_DEPS "Use system-installed dependencies" OFF)
 
@@ -116,6 +117,10 @@ endif()
 # ============================================================================
 if(WIKILIB_BUILD_EXAMPLES)
     add_subdirectory(examples)
+endif()
+
+if(WIKILIB_BUILD_BENCHMARKS)
+    add_subdirectory(benchmarks)
 endif()
 
 # ============================================================================
