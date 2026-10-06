@@ -5,9 +5,28 @@
 
 #include "wikilib/dump/page_handler.h"
 #include <algorithm>
+#include <charconv>
+#include <stdexcept>
 #include "wikilib/dump/xml_reader.h"
 
 namespace wikilib::dump {
+
+namespace {
+
+template<typename T>
+T parse_number(std::string_view value) {
+    const auto start = value.find_first_not_of(" \t\r\n");
+    if (start == std::string_view::npos)
+        throw std::runtime_error("Empty numeric XML metadata");
+    value = value.substr(start, value.find_last_not_of(" \t\r\n") - start + 1);
+    T number{};
+    const auto parsed = std::from_chars(value.data(), value.data() + value.size(), number);
+    if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size())
+        throw std::runtime_error("Invalid numeric XML metadata: " + std::string(value));
+    return number;
+}
+
+} // namespace
 
 // ============================================================================
 // PageFilter implementation
@@ -60,11 +79,31 @@ struct PageHandler::Impl {
     std::string error_message;
     bool header_parsed = false;
     bool at_eof = false;
+    bool page_started = false;
 
     void parse_header();
-    std::optional<Page> read_page();
+    std::optional<XmlEvent> next_event();
+    bool sync_error();
+    std::optional<Page> read_page(bool only_latest_revision = false);
     Revision parse_revision();
 };
+
+bool PageHandler::Impl::sync_error() {
+    if (reader && !reader->error().empty()) {
+        error_message = std::string(reader->error());
+        at_eof = true;
+    }
+    return !error_message.empty();
+}
+
+std::optional<XmlEvent> PageHandler::Impl::next_event() {
+    auto event = reader->next();
+    if (sync_error() || !event || event->type == XmlEventType::EndDocument) {
+        at_eof = true;
+        return std::nullopt;
+    }
+    return event;
+}
 
 void PageHandler::Impl::parse_header() {
     if (header_parsed || !reader)
@@ -72,7 +111,7 @@ void PageHandler::Impl::parse_header() {
     header_parsed = true;
 
     while (true) {
-        auto event = reader->next();
+        auto event = next_event();
         if (!event)
             break;
 
@@ -86,16 +125,15 @@ void PageHandler::Impl::parse_header() {
             } else if (event->name == "generator") {
                 site_info.generator = reader->read_text();
             } else if (event->name == "namespace") {
-                Namespace ns;
+                Namespace ns{};
                 if (auto key = event->get_attribute("key")) {
-                    ns.id = std::stoi(std::string(*key));
+                    ns.id = parse_number<NamespaceId>(*key);
                 }
                 ns.name = reader->read_text();
                 ns.canonical_name = ns.name;
                 site_info.namespaces.push_back(std::move(ns));
             } else if (event->name == "page") {
-                // Reached first page, stop parsing header
-                // We need to handle this page
+                page_started = true;
                 break;
             }
         } else if (event->type == XmlEventType::EndElement) {
@@ -104,6 +142,7 @@ void PageHandler::Impl::parse_header() {
             }
         }
     }
+    sync_error();
 }
 
 Revision PageHandler::Impl::parse_revision() {
@@ -111,17 +150,17 @@ Revision PageHandler::Impl::parse_revision() {
     int depth = 1;
 
     while (depth > 0) {
-        auto event = reader->next();
+        auto event = next_event();
         if (!event)
             break;
 
         if (event->type == XmlEventType::StartElement) {
             depth++;
             if (event->name == "id" && depth == 2) {
-                rev.id = std::stoull(reader->read_text());
+                rev.id = parse_number<RevisionId>(reader->read_text());
                 depth--;
             } else if (event->name == "parentid") {
-                rev.parent_id = std::stoull(reader->read_text());
+                rev.parent_id = parse_number<RevisionId>(reader->read_text());
                 depth--;
             } else if (event->name == "timestamp") {
                 rev.timestamp = reader->read_text();
@@ -130,7 +169,7 @@ Revision PageHandler::Impl::parse_revision() {
                 // Parse contributor - can have username or ip
                 int contrib_depth = 1;
                 while (contrib_depth > 0) {
-                    auto ce = reader->next();
+                    auto ce = next_event();
                     if (!ce)
                         break;
                     if (ce->type == XmlEventType::StartElement) {
@@ -168,20 +207,21 @@ Revision PageHandler::Impl::parse_revision() {
     return rev;
 }
 
-std::optional<Page> PageHandler::Impl::read_page() {
+std::optional<Page> PageHandler::Impl::read_page(bool only_latest_revision) {
     if (!reader || at_eof) {
         return std::nullopt;
     }
 
     // Find start of <page>
-    while (true) {
-        auto event = reader->next();
+    while (!page_started) {
+        auto event = next_event();
         if (!event) {
             at_eof = true;
             return std::nullopt;
         }
 
         if (event->type == XmlEventType::StartElement && event->name == "page") {
+            page_started = true;
             break;
         }
 
@@ -190,12 +230,13 @@ std::optional<Page> PageHandler::Impl::read_page() {
             return std::nullopt;
         }
     }
+    page_started = false;
 
     Page page;
     int depth = 1;
 
     while (depth > 0) {
-        auto event = reader->next();
+        auto event = next_event();
         if (!event)
             break;
 
@@ -206,10 +247,10 @@ std::optional<Page> PageHandler::Impl::read_page() {
                 page.info.title = reader->read_text();
                 depth--;
             } else if (event->name == "ns") {
-                page.info.namespace_id = std::stoi(reader->read_text());
+                page.info.namespace_id = parse_number<NamespaceId>(reader->read_text());
                 depth--;
             } else if (event->name == "id" && depth == 2) {
-                page.info.id = std::stoull(reader->read_text());
+                page.info.id = parse_number<PageId>(reader->read_text());
                 depth--;
             } else if (event->name == "redirect") {
                 if (auto title = event->get_attribute("title")) {
@@ -217,6 +258,8 @@ std::optional<Page> PageHandler::Impl::read_page() {
                 }
                 stats.redirects_found++;
             } else if (event->name == "revision") {
+                if (only_latest_revision)
+                    page.revisions.clear();
                 page.revisions.push_back(parse_revision());
                 depth--;
             }
@@ -225,8 +268,18 @@ std::optional<Page> PageHandler::Impl::read_page() {
         }
     }
 
+    if (sync_error() || depth != 0) {
+        if (error_message.empty())
+            error_message = "Unexpected end of XML page";
+        at_eof = true;
+        return std::nullopt;
+    }
     stats.pages_read++;
     stats.bytes_processed = reader->bytes_processed();
+    if (const auto *revision = page.latest_revision()) {
+        page.info.revision_id = revision->id;
+        page.info.timestamp = revision->timestamp;
+    }
 
     return page;
 }
@@ -237,16 +290,33 @@ PageHandler::PageHandler(const std::string &dump_path) : impl_(std::make_unique<
         impl_->error_message = std::string(impl_->reader->error());
         impl_->at_eof = true;
     }
-    impl_->parse_header();
+    try {
+        impl_->parse_header();
+    } catch (const std::exception &error) {
+        if (!impl_->sync_error())
+            impl_->error_message = error.what();
+        impl_->at_eof = true;
+    }
 }
 
 PageHandler::PageHandler(std::unique_ptr<XmlReader> reader) : impl_(std::make_unique<Impl>()) {
     impl_->reader = std::move(reader);
+    if (!impl_->reader) {
+        impl_->error_message = "Null XML reader";
+        impl_->at_eof = true;
+        return;
+    }
     if (impl_->reader && !impl_->reader->error().empty()) {
         impl_->error_message = std::string(impl_->reader->error());
         impl_->at_eof = true;
     }
-    impl_->parse_header();
+    try {
+        impl_->parse_header();
+    } catch (const std::exception &error) {
+        if (!impl_->sync_error())
+            impl_->error_message = error.what();
+        impl_->at_eof = true;
+    }
 }
 
 PageHandler::~PageHandler() = default;
@@ -280,12 +350,31 @@ void PageHandler::process(PageCallback callback, const PageFilter &filter) {
 }
 
 std::optional<Page> PageHandler::next_page() {
-    return impl_ ? impl_->read_page() : std::nullopt;
+    if (!impl_)
+        return std::nullopt;
+    try {
+        return impl_->read_page();
+    } catch (const std::exception &error) {
+        if (!impl_->sync_error())
+            impl_->error_message = error.what();
+        impl_->at_eof = true;
+        return std::nullopt;
+    }
 }
 
 std::optional<Page> PageHandler::next_page(const PageFilter &filter) {
     while (true) {
-        auto page = next_page();
+        if (!impl_)
+            return std::nullopt;
+        std::optional<Page> page;
+        try {
+            page = impl_->read_page(filter.only_latest_revision);
+        } catch (const std::exception &error) {
+            if (!impl_->sync_error())
+                impl_->error_message = error.what();
+            impl_->at_eof = true;
+            return std::nullopt;
+        }
         if (!page)
             return std::nullopt;
 
@@ -312,7 +401,7 @@ bool PageHandler::eof() const noexcept {
 }
 
 std::string_view PageHandler::error() const noexcept {
-    return impl_ ? impl_->error_message : "";
+    return impl_ ? std::string_view(impl_->error_message) : std::string_view{};
 }
 
 // ============================================================================

@@ -26,17 +26,27 @@ and LeakSanitizer checks.
 
 Depends on stage 1 for compressed-input integration tests.
 
-- [ ] Preserve the first `<page>` encountered while parsing the dump header.
-- [ ] Emit an `EndElement` event for self-closing XML elements.
-- [ ] Preserve whitespace inside `<text>` content.
-- [ ] Propagate decompression and XML errors to `PageHandler`.
-- [ ] Apply `PageFilter::only_latest_revision` rather than merely exposing the
+- [x] Preserve the first `<page>` encountered while parsing the dump header.
+- [x] Emit an `EndElement` event for self-closing XML elements.
+- [x] Preserve whitespace inside `<text>` content.
+- [x] Propagate decompression and XML errors to `PageHandler`.
+- [x] Apply `PageFilter::only_latest_revision` rather than merely exposing the
   option.
-- [ ] Add tests for empty text, redirects, multiple revisions, and XML elements
+- [x] Add tests for empty text, redirects, multiple revisions, and XML elements
   split across buffer boundaries.
 
 **Acceptance criteria:** Pages, metadata, and text match the input, including the
 first and last pages. Empty and self-closing elements do not disrupt parsing.
+
+**Completed:** Added 23 XML and page-reading tests. Malformed or truncated XML
+produces an Error event and incomplete pages are not returned. Numeric metadata
+is validated, numeric entities are decoded without integer overflow, and CDATA
+and text whitespace are preserved. The latest-revision filter retains only the
+last revision in dump order; unfiltered `next_page()` retains all revisions.
+Returned XML iterator elements now own their name and attribute storage, and
+error views remain valid while the owning reader exists and the error is unchanged.
+The library and examples build; the full suite has 405 passing tests and 8
+skipped tests. All 23 new tests pass ASan, UBSan, and LSan checks.
 
 ## 3. Stabilize index reading and page extraction
 

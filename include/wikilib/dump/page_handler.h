@@ -101,7 +101,7 @@ struct PageFilter {
     std::optional<std::string> title_prefix;
     std::optional<std::string> title_contains;
     bool include_redirects = true;
-    bool only_latest_revision = true;
+    bool only_latest_revision = true; // Retain the last revision in dump order
     std::optional<size_t> max_pages;
 
     [[nodiscard]] bool matches(const Page &page) const;
@@ -146,11 +146,14 @@ public:
 
     /**
      * @brief Get next page
+     * @note Retains all revisions. Returns nullopt on EOF or error; inspect error().
      */
     [[nodiscard]] std::optional<Page> next_page();
 
     /**
      * @brief Get next page matching filter
+     * @note Applies only_latest_revision while reading, retaining at most one
+     * revision when enabled. Returns nullopt on EOF or error; inspect error().
      */
     [[nodiscard]] std::optional<Page> next_page(const PageFilter &filter);
 

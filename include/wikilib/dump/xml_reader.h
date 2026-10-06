@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include "wikilib/core/types.h"
 #include "wikilib/dump/bz2_stream.h"
 
@@ -82,6 +83,8 @@ public:
     /**
      * @brief Read next event
      * @return Event or nullopt at end of document
+     * @note Event string views remain valid until the next reader operation.
+     * Malformed XML or an input failure produces one Error event, then nullopt.
      */
     [[nodiscard]] std::optional<XmlEvent> next();
 
@@ -92,6 +95,7 @@ public:
 
     /**
      * @brief Read text content of current element
+     * @note Preserves whitespace. Inspect error() before using the result.
      */
     [[nodiscard]] std::string read_text();
 
@@ -136,11 +140,20 @@ public:
     XmlElementIterator(XmlReader &reader, std::string path);
 
     struct Element {
+        // Returned elements own the storage backing these views, including
+        // when copied or moved and after the reader advances.
         std::string_view name;
         std::vector<XmlAttribute> attributes;
         std::string text_content;
 
         [[nodiscard]] std::optional<std::string_view> attribute(std::string_view name) const;
+    private:
+        struct Storage {
+            std::string name;
+            std::vector<std::pair<std::string, std::string>> attributes;
+        };
+        std::shared_ptr<Storage> storage_;
+        friend class XmlElementIterator;
     };
 
     /**

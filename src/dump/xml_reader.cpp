@@ -5,6 +5,7 @@
 
 #include "wikilib/dump/xml_reader.h"
 #include <algorithm>
+#include <charconv>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -39,6 +40,8 @@ struct XmlReader::Impl {
     bool at_eof = false;
     bool document_started = false;
     bool document_ended = false;
+    bool root_seen = false;
+    bool pending_end_element = false;
     std::string error_message;
     uint64_t bytes_processed = 0;
 
@@ -72,6 +75,11 @@ bool XmlReader::Impl::refill_buffer() {
 
     if (bz2_stream) {
         size_t n = bz2_stream->read(read_buffer, BUFFER_SIZE);
+        if (!bz2_stream->error().empty()) {
+            error_message = std::string(bz2_stream->error());
+            at_eof = true;
+            return false;
+        }
         if (n > 0) {
             buffer.assign(read_buffer, n);
             bytes_processed += n;
@@ -81,6 +89,11 @@ bool XmlReader::Impl::refill_buffer() {
     } else if (plain_stream) {
         plain_stream->read(read_buffer, BUFFER_SIZE);
         size_t n = static_cast<size_t>(plain_stream->gcount());
+        if (plain_stream->bad() || (plain_stream->fail() && !plain_stream->eof())) {
+            error_message = "XML input I/O error";
+            at_eof = true;
+            return false;
+        }
         if (n > 0) {
             buffer.assign(read_buffer, n);
             bytes_processed += n;
@@ -134,11 +147,15 @@ bool XmlReader::Impl::skip_whitespace() {
 
 std::string XmlReader::Impl::read_name() {
     std::string name;
+    const auto first = static_cast<unsigned char>(peek_char());
+    if (!(std::isalpha(first) || first == '_' || first == ':' || first >= 0x80))
+        return name;
     while (true) {
         char c = peek_char();
         if (c == '\0')
             break;
-        if (std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-' || c == ':' || c == '.') {
+        if (std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-' || c == ':' || c == '.' ||
+            static_cast<unsigned char>(c) >= 0x80) {
             name += get_char();
         } else {
             break;
@@ -150,13 +167,23 @@ std::string XmlReader::Impl::read_name() {
 std::string XmlReader::Impl::read_quoted_string() {
     char quote = get_char();
     if (quote != '"' && quote != '\'') {
+        error_message = "XML attribute value must be quoted";
         return "";
     }
 
     std::string value;
     while (true) {
         char c = get_char();
-        if (c == '\0' || c == quote)
+        if (c == '\0') {
+            if (error_message.empty())
+                error_message = "Unexpected EOF in XML attribute";
+            break;
+        }
+        if (c == '<') {
+            error_message = "Unescaped '<' in XML attribute";
+            break;
+        }
+        if (c == quote)
             break;
         value += c;
     }
@@ -187,24 +214,17 @@ std::string XmlReader::Impl::decode_entities(std::string_view text) {
                     result += '\'';
                 } else if (!entity.empty() && entity[0] == '#') {
                     // Numeric entity
-                    int codepoint = 0;
-                    if (entity.size() > 1 && (entity[1] == 'x' || entity[1] == 'X')) {
-                        // Hex
-                        for (size_t j = 2; j < entity.size(); ++j) {
-                            char c = entity[j];
-                            codepoint *= 16;
-                            if (c >= '0' && c <= '9')
-                                codepoint += c - '0';
-                            else if (c >= 'a' && c <= 'f')
-                                codepoint += c - 'a' + 10;
-                            else if (c >= 'A' && c <= 'F')
-                                codepoint += c - 'A' + 10;
-                        }
-                    } else {
-                        // Decimal
-                        for (size_t j = 1; j < entity.size(); ++j) {
-                            codepoint = codepoint * 10 + (entity[j] - '0');
-                        }
+                    uint32_t codepoint = 0;
+                    const bool hex = entity.size() > 1 && (entity[1] == 'x' || entity[1] == 'X');
+                    const auto digits = entity.substr(hex ? 2 : 1);
+                    const auto parsed =
+                            std::from_chars(digits.data(), digits.data() + digits.size(), codepoint, hex ? 16 : 10);
+                    if (parsed.ec != std::errc{} || parsed.ptr != digits.data() + digits.size() ||
+                        !(codepoint == 9 || codepoint == 10 || codepoint == 13 ||
+                          (codepoint >= 0x20 && codepoint <= 0xD7FF) || (codepoint >= 0xE000 && codepoint <= 0xFFFD) ||
+                          (codepoint >= 0x10000 && codepoint <= 0x10FFFF))) {
+                        error_message = "Invalid numeric XML entity";
+                        return {};
                     }
 
                     // Encode as UTF-8
@@ -224,15 +244,15 @@ std::string XmlReader::Impl::decode_entities(std::string_view text) {
                         result += static_cast<char>(0x80 | (codepoint & 0x3F));
                     }
                 } else {
-                    // Unknown entity, keep as-is
-                    result += '&';
-                    result += entity;
-                    result += ';';
+                    error_message = "Unknown XML entity";
+                    return {};
                 }
 
                 i = end + 1;
                 continue;
             }
+            error_message = "Unterminated XML entity";
+            return {};
         }
 
         result += text[i];
@@ -245,7 +265,12 @@ std::string XmlReader::Impl::decode_entities(std::string_view text) {
 void XmlReader::Impl::skip_until(char c) {
     while (true) {
         char ch = get_char();
-        if (ch == '\0' || ch == c)
+        if (ch == '\0') {
+            if (error_message.empty())
+                error_message = "Unexpected EOF in XML markup";
+            break;
+        }
+        if (ch == c)
             break;
     }
 }
@@ -257,8 +282,11 @@ void XmlReader::Impl::skip_until(std::string_view s) {
     std::string match_buffer;
     while (true) {
         char c = get_char();
-        if (c == '\0')
+        if (c == '\0') {
+            if (error_message.empty())
+                error_message = "Unexpected EOF in XML markup";
             break;
+        }
 
         match_buffer += c;
         if (match_buffer.size() > s.size()) {
@@ -287,14 +315,14 @@ XmlReader::XmlReader(const std::string &path) : impl_(std::make_unique<Impl>()) 
         return;
     }
 
-    char header[2];
+    char header[2] = {};
     test_file.read(header, 2);
     test_file.close();
 
     if (header[0] == 'B' && header[1] == 'Z') {
         impl_->bz2_stream = std::make_unique<Bz2Stream>(path);
         if (!impl_->bz2_stream->is_open()) {
-            impl_->error_message = "Failed to open BZ2 file";
+            impl_->error_message = std::string(impl_->bz2_stream->error());
             impl_->at_eof = true;
         }
     } else {
@@ -309,7 +337,9 @@ XmlReader::XmlReader(const std::string &path) : impl_(std::make_unique<Impl>()) 
 XmlReader::XmlReader(std::unique_ptr<Bz2Stream> stream) : impl_(std::make_unique<Impl>()) {
     impl_->bz2_stream = std::move(stream);
     if (!impl_->bz2_stream || !impl_->bz2_stream->is_open()) {
-        impl_->error_message = "Invalid BZ2 stream";
+        impl_->error_message = impl_->bz2_stream && !impl_->bz2_stream->error().empty()
+                                       ? std::string(impl_->bz2_stream->error())
+                                       : "Invalid BZ2 stream";
         impl_->at_eof = true;
     }
 }
@@ -331,183 +361,159 @@ XmlReader::XmlReader(XmlReader &&) noexcept = default;
 XmlReader &XmlReader::operator=(XmlReader &&) noexcept = default;
 
 std::optional<XmlEvent> XmlReader::next() {
-    if (!impl_ || impl_->at_eof || impl_->document_ended) {
+    if (!impl_ || impl_->document_ended)
         return std::nullopt;
-    }
 
-    // Start document event
+    auto fail = [&](std::string message) -> std::optional<XmlEvent> {
+        if (impl_->error_message.empty())
+            impl_->error_message = std::move(message);
+        impl_->document_ended = true;
+        return XmlEvent{XmlEventType::Error, {}, impl_->error_message, {}};
+    };
+    if (!impl_->error_message.empty())
+        return fail({});
+
     if (!impl_->document_started) {
         impl_->document_started = true;
-
-        // Skip BOM if present
         if (impl_->peek_char() == '\xEF') {
-            impl_->get_char();
-            if (impl_->peek_char() == '\xBB') {
-                impl_->get_char();
-                if (impl_->peek_char() == '\xBF') {
-                    impl_->get_char();
-                }
-            }
+            if (!impl_->match("\xEF\xBB\xBF"))
+                return fail("Invalid XML byte order mark");
         }
-
-        // Skip XML declaration if present
-        impl_->skip_whitespace();
-        if (impl_->peek_char() == '<') {
-            // Check for <?xml
-            size_t saved_pos = impl_->buffer_pos;
-            impl_->get_char(); // <
-            if (impl_->peek_char() == '?') {
-                impl_->skip_until("?>");
-            } else {
-                impl_->buffer_pos = saved_pos;
-            }
-        }
-
+        if (!impl_->error_message.empty())
+            return fail({});
         return XmlEvent{XmlEventType::StartDocument, {}, {}, {}};
     }
 
-    impl_->skip_whitespace();
+    if (impl_->pending_end_element) {
+        impl_->pending_end_element = false;
+        impl_->element_stack.pop();
+        return XmlEvent{XmlEventType::EndElement, impl_->current_element_name, {}, {}};
+    }
 
-    if (impl_->peek_char() == '\0') {
-        if (!impl_->document_ended) {
+    while (true) {
+        const char first = impl_->peek_char();
+        if (!impl_->error_message.empty())
+            return fail({});
+        if (first == '\0') {
+            if (!impl_->element_stack.empty())
+                return fail("Unexpected EOF in XML element");
+            if (!impl_->root_seen)
+                return fail("XML document has no root element");
             impl_->document_ended = true;
             return XmlEvent{XmlEventType::EndDocument, {}, {}, {}};
         }
-        return std::nullopt;
-    }
 
-    if (impl_->peek_char() == '<') {
-        impl_->get_char(); // consume <
-
-        // Comment
-        if (impl_->peek_char() == '!') {
-            impl_->get_char();
-            if (impl_->peek_char() == '-') {
-                impl_->get_char();
-                if (impl_->peek_char() == '-') {
-                    impl_->get_char();
-                    // Read comment content
-                    impl_->current_text.clear();
-                    while (true) {
-                        char c = impl_->get_char();
-                        if (c == '\0')
-                            break;
-                        if (c == '-' && impl_->peek_char() == '-') {
-                            impl_->get_char();
-                            if (impl_->peek_char() == '>') {
-                                impl_->get_char();
-                                break;
-                            }
-                            impl_->current_text += '-';
-                            impl_->current_text += '-';
-                        } else {
-                            impl_->current_text += c;
-                        }
-                    }
-                    return XmlEvent{XmlEventType::Comment, {}, impl_->current_text, {}};
-                }
+        if (first != '<') {
+            impl_->current_text.clear();
+            while (impl_->peek_char() != '\0' && impl_->peek_char() != '<') {
+                impl_->current_text += impl_->get_char();
             }
-            // Skip DOCTYPE or CDATA
-            if (impl_->peek_char() == '[') {
-                // CDATA
-                impl_->skip_until("]]>");
-                return next();
+            if (!impl_->error_message.empty())
+                return fail({});
+            if (impl_->element_stack.empty()) {
+                if (impl_->current_text.find_first_not_of(" \t\r\n") != std::string::npos)
+                    return fail("XML text outside root element");
+                continue;
             }
-            impl_->skip_until('>');
-            return next();
+            impl_->current_text = impl_->decode_entities(impl_->current_text);
+            if (!impl_->error_message.empty())
+                return fail({});
+            return XmlEvent{XmlEventType::Text, {}, impl_->current_text, {}};
         }
 
-        // End element
+        impl_->get_char(); // <
+        if (impl_->peek_char() == '?') {
+            impl_->get_char();
+            impl_->skip_until("?>");
+            if (!impl_->error_message.empty())
+                return fail({});
+            continue;
+        }
+
+        if (impl_->peek_char() == '!') {
+            impl_->get_char();
+            const bool comment = impl_->peek_char() == '-';
+            if (comment) {
+                if (!impl_->match("--"))
+                    return fail("Invalid XML comment");
+            } else if (impl_->peek_char() == '[') {
+                if (!impl_->match("[CDATA["))
+                    return fail("Invalid CDATA section");
+                if (impl_->element_stack.empty())
+                    return fail("CDATA outside root element");
+            } else {
+                return fail("Unsupported XML declaration");
+            }
+            const std::string_view ending = comment ? "-->" : "]]>";
+            impl_->current_text.clear();
+            while (!impl_->current_text.ends_with(ending)) {
+                char c = impl_->get_char();
+                if (c == '\0')
+                    return fail("Unexpected EOF in XML comment or CDATA");
+                impl_->current_text += c;
+            }
+            impl_->current_text.resize(impl_->current_text.size() - ending.size());
+            return XmlEvent{comment ? XmlEventType::Comment : XmlEventType::Text, {}, impl_->current_text, {}};
+        }
+
         if (impl_->peek_char() == '/') {
             impl_->get_char();
             impl_->current_element_name = impl_->read_name();
-            impl_->skip_until('>');
-
-            if (!impl_->element_stack.empty()) {
-                impl_->element_stack.pop();
-            }
-
+            impl_->skip_whitespace();
+            if (impl_->get_char() != '>')
+                return fail("Invalid XML closing tag");
+            if (impl_->element_stack.empty() || impl_->element_stack.top() != impl_->current_element_name)
+                return fail("Mismatched XML closing tag: " + impl_->current_element_name);
+            impl_->element_stack.pop();
             return XmlEvent{XmlEventType::EndElement, impl_->current_element_name, {}, {}};
         }
 
-        // Processing instruction
-        if (impl_->peek_char() == '?') {
-            impl_->skip_until("?>");
-            return next();
-        }
-
-        // Start element
         impl_->current_element_name = impl_->read_name();
+        if (impl_->current_element_name.empty())
+            return fail("Missing XML element name");
+        if (impl_->element_stack.empty()) {
+            if (impl_->root_seen)
+                return fail("Multiple XML root elements");
+            impl_->root_seen = true;
+        }
         impl_->current_attributes.clear();
-
-        // Read attributes
         while (true) {
+            const char before_space = impl_->peek_char();
             impl_->skip_whitespace();
-            char c = impl_->peek_char();
-
-            if (c == '/' || c == '>' || c == '\0')
+            const char c = impl_->peek_char();
+            if (c == '/' || c == '>')
                 break;
-
-            std::string attr_name = impl_->read_name();
-            if (attr_name.empty())
-                break;
-
+            if (c == '\0')
+                return fail("Unexpected EOF in XML opening tag");
+            if (before_space != ' ' && before_space != '\t' && before_space != '\r' && before_space != '\n')
+                return fail("Missing whitespace before XML attribute");
+            std::string name = impl_->read_name();
+            if (name.empty())
+                return fail("Missing XML attribute name");
+            for (const auto &attribute: impl_->current_attributes)
+                if (attribute.first == name)
+                    return fail("Duplicate XML attribute");
             impl_->skip_whitespace();
-            if (impl_->peek_char() == '=') {
-                impl_->get_char();
-                impl_->skip_whitespace();
-                std::string attr_value = impl_->read_quoted_string();
-                impl_->current_attributes.emplace_back(std::move(attr_name), std::move(attr_value));
-            } else {
-                impl_->current_attributes.emplace_back(std::move(attr_name), "");
-            }
+            if (impl_->get_char() != '=')
+                return fail("Missing '=' in XML attribute");
+            impl_->skip_whitespace();
+            auto value = impl_->read_quoted_string();
+            if (!impl_->error_message.empty())
+                return fail({});
+            impl_->current_attributes.emplace_back(std::move(name), std::move(value));
         }
-
-        bool self_closing = false;
-        if (impl_->peek_char() == '/') {
+        impl_->pending_end_element = impl_->peek_char() == '/';
+        if (impl_->pending_end_element)
             impl_->get_char();
-            self_closing = true;
-        }
+        if (impl_->get_char() != '>')
+            return fail("Invalid XML opening tag");
+        impl_->element_stack.push(impl_->current_element_name);
 
-        if (impl_->peek_char() == '>') {
-            impl_->get_char();
-        }
-
-        // Build event
-        XmlEvent event;
-        event.type = XmlEventType::StartElement;
-        event.name = impl_->current_element_name;
-        event.attributes.reserve(impl_->current_attributes.size());
-        for (const auto &[name, value]: impl_->current_attributes) {
+        XmlEvent event{XmlEventType::StartElement, impl_->current_element_name, {}, {}};
+        for (const auto &[name, value]: impl_->current_attributes)
             event.attributes.push_back({name, value});
-        }
-
-        if (!self_closing) {
-            impl_->element_stack.push(impl_->current_element_name);
-        } else {
-            // For self-closing, we'll need to return EndElement next
-            // For simplicity, just push and will pop on next call
-        }
-
         return event;
     }
-
-    // Text content
-    impl_->current_text.clear();
-    while (true) {
-        char c = impl_->peek_char();
-        if (c == '\0' || c == '<')
-            break;
-        impl_->current_text += impl_->get_char();
-    }
-
-    if (!impl_->current_text.empty()) {
-        std::string decoded = impl_->decode_entities(impl_->current_text);
-        impl_->current_text = std::move(decoded);
-        return XmlEvent{XmlEventType::Text, {}, impl_->current_text, {}};
-    }
-
-    return next();
 }
 
 void XmlReader::skip_element() {
@@ -556,7 +562,7 @@ std::string XmlReader::read_text() {
 }
 
 bool XmlReader::eof() const noexcept {
-    return !impl_ || impl_->at_eof || impl_->document_ended;
+    return !impl_ || impl_->document_ended;
 }
 
 int XmlReader::depth() const noexcept {
@@ -590,7 +596,7 @@ uint64_t XmlReader::bytes_processed() const noexcept {
 }
 
 std::string_view XmlReader::error() const noexcept {
-    return impl_ ? impl_->error_message : "";
+    return impl_ ? std::string_view(impl_->error_message) : std::string_view{};
 }
 
 // ============================================================================
@@ -645,9 +651,18 @@ std::optional<XmlElementIterator::Element> XmlElementIterator::next() {
 
             if (matches) {
                 Element elem;
-                elem.name = event->name;
-                elem.attributes = event->attributes;
+                elem.storage_ = std::make_shared<Element::Storage>();
+                elem.storage_->name = event->name;
+                for (const auto &attr: event->attributes) {
+                    elem.storage_->attributes.emplace_back(attr.name, attr.value);
+                }
+                elem.name = elem.storage_->name;
+                for (const auto &[name, value]: elem.storage_->attributes) {
+                    elem.attributes.push_back({name, value});
+                }
                 elem.text_content = reader_.read_text();
+                if (!reader_.error().empty())
+                    return std::nullopt;
                 return elem;
             }
         }
