@@ -24,4 +24,6 @@ find_package(nlohmann_json REQUIRED)
 # ============================================================================
 # GoogleTest - for unit tests
 # ============================================================================
-find_package(GTest REQUIRED)
+if(WIKILIB_BUILD_TESTS)
+    find_package(GTest REQUIRED)
+endif()

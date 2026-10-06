@@ -26,6 +26,7 @@ add_executable(wikilib_tests
     dump/test_processing_paths.cpp
     dump/test_dump_path.cpp
     templates/test_template_parser.cpp
+    templates/test_template_expander.cpp
     templates/test_complex_templates.cpp
 )
 
@@ -51,3 +52,13 @@ gtest_discover_tests(wikilib_tests)
 #        ${CMAKE_CURRENT_BINARY_DIR}/data
 #)
 #add_dependencies(wikilib_tests copy_test_data)
+
+# Exercise the installed package in a separate project with no source include paths.
+add_test(NAME InstalledPackageConsumer
+    COMMAND ${CMAKE_COMMAND}
+        -DWIKILIB_BUILD_DIR=${CMAKE_BINARY_DIR}
+        -DWIKILIB_SOURCE_DIR=${PROJECT_SOURCE_DIR}
+        -DTEST_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+        -DTEST_CONFIG=$<CONFIG>
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/test_install.cmake
+)

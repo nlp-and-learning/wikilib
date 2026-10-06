@@ -155,7 +155,7 @@ std::string ExternalLinkNode::to_wikitext() const {
 
 std::string TemplateNode::to_wikitext() const {
     std::string result = "{{";
-    if (is_parser_function) {
+    if (is_parser_function && !name.starts_with("#")) {
         result += "#";
     }
     result += name;

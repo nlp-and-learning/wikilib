@@ -163,19 +163,61 @@ are evidence for these fixtures rather than general throughput guarantees.
 
 Schedule after reliable reading and indexed streaming are available.
 
-- [ ] Implement `TemplateExpander::expand_ast()`.
-- [ ] Enforce expansion limits consistently and make expansion caching account
+- [x] Implement `TemplateExpander::expand_ast()`.
+- [x] Enforce expansion limits consistently and make expansion caching account
   for page context.
-- [ ] Implement expression parsing for `#expr` and `#ifexpr`.
-- [ ] Define and document the supported subset of MediaWiki behavior.
-- [ ] Treat Lua execution and `#invoke` support as a separate follow-up stage.
-- [ ] Update the README with actual capabilities, limitations, and indexed
+- [x] Implement expression parsing for `#expr` and `#ifexpr`.
+- [x] Define and document the supported subset of MediaWiki behavior.
+- [x] Treat Lua execution and `#invoke` support as a separate follow-up stage.
+- [x] Update the README with actual capabilities, limitations, and indexed
   streaming examples.
-- [ ] Verify installation and consumption from an external CMake project.
+- [x] Verify installation and consumption from an external CMake project.
 
 **Acceptance criteria:** Implemented behavior is covered by tests, unsupported
 behavior is documented, and an external project can build against the installed
 library.
+
+**Completed:** `TemplateExpander` now expands nested templates, parameters,
+defaults, selected parser functions, page/UTC-date magic words, and a defined
+numeric expression grammar. `#expr` / `#ifexpr` report invalid expressions rather
+than silently returning zero. Conditional results are evaluated lazily, nested
+errors propagate, and recursion/count/output limits apply per operation across
+all public expansion entry points. The cache holds raw definitions for one
+operation; results always use the current page and parameters and consume the
+budget. Unsupported calls preserve all arguments or are dropped according to
+configuration; Lua remains unimplemented even when its reserved flag is set.
+`expand_ast()` expands serialized wikitext and transactionally reparses the
+whole document, repairing parent/category/redirect pointers. Its tests also
+exposed and fixed doubled parser-function markers in AST serialization and
+non-progress loops in markup parser recovery. Invocation parsing/discovery now
+shares balanced delimiter handling for nested templates/parameters and wiki links.
+
+Added 29 expansion/invocation integration tests and an installed-package consumer
+test. The full suite has 495 passing tests and 8 skipped tests. All 87 template
+parser/expansion tests pass ASan, UBSan, and LSan checks. Library-only Release
+builds no longer require GoogleTest. Installation includes `wikilib.hpp`,
+exports C++23 and BZip2's imported target, and discovers all exported dependency
+targets. A separate project builds and runs against the installed package,
+exercising expansion, AST, BZ2, JSON, and ICU. Added the missing implementation
+of `PageInfo::full_title()`; dump titles already include localized prefixes.
+The README contains build/install, template, and indexed streaming examples;
+[template support documentation](docs/TEMPLATE_EXPANSION.md) defines limits and
+unsupported behavior. This completes preparation work, without publishing a
+release or claiming full MediaWiki compatibility.
+
+## 7. Lua / #invoke integration — follow-up
+
+Outside the initial release-preparation milestone. Define the runtime and
+supported Scribunto interface before implementation.
+
+- [ ] Choose and document a Lua runtime and the initial module API subset.
+- [ ] Connect module loading to `TemplateProvider::get_module()`.
+- [ ] Implement `#invoke` argument/frame handling and explicit runtime errors.
+- [ ] Define execution/resource limits and page-context-aware module state.
+- [ ] Add module integration tests and document unsupported Scribunto APIs.
+
+Real Wikimedia dump performance measurements remain a separate follow-up to the
+synthetic benchmark report from stage 5.
 
 ## Milestones
 

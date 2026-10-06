@@ -128,9 +128,14 @@ NodeList Parser::parse_content() {
     NodeList nodes;
 
     while (!at_end()) {
+        const auto before = current().location.begin.offset;
         auto node = parse_node();
         if (node) {
             nodes.push_back(std::move(node));
+        }
+        if (!at_end() && current().location.begin.offset == before) {
+            add_error("Unexpected token without parser progress", ErrorSeverity::Error);
+            advance();
         }
     }
 
@@ -146,9 +151,14 @@ NodeList Parser::parse_block_content() {
             break;
         }
 
+        const auto before = current().location.begin.offset;
         auto node = parse_node();
         if (node) {
             nodes.push_back(std::move(node));
+        }
+        if (!at_end() && current().location.begin.offset == before) {
+            add_error("Unexpected token without parser progress", ErrorSeverity::Error);
+            advance();
         }
     }
 

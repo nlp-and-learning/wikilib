@@ -6,8 +6,9 @@
 #include "wikilib/templates/template_parser.h"
 #include <algorithm>
 #include <cctype>
-#include <regex>
 #include <nlohmann/json.hpp>
+#include <regex>
+#include "expansion_syntax.h"
 
 namespace wikilib::templates {
 
@@ -97,13 +98,13 @@ std::vector<ParameterInfo> TemplateParser::parse_template_data(std::string_view 
             return params;
         }
 
-        auto& params_obj = json["params"];
+        auto &params_obj = json["params"];
         if (!params_obj.is_object()) {
             return params;
         }
 
         // Iterate over each parameter
-        for (auto& [name, param_data] : params_obj.items()) {
+        for (auto &[name, param_data]: params_obj.items()) {
             ParameterInfo info;
             info.name = name;
 
@@ -133,7 +134,7 @@ std::vector<ParameterInfo> TemplateParser::parse_template_data(std::string_view 
 
             // Extract aliases
             if (param_data.contains("aliases") && param_data["aliases"].is_array()) {
-                for (auto& alias : param_data["aliases"]) {
+                for (auto &alias: param_data["aliases"]) {
                     if (alias.is_string()) {
                         info.aliases.push_back(alias.get<std::string>());
                     }
@@ -142,7 +143,7 @@ std::vector<ParameterInfo> TemplateParser::parse_template_data(std::string_view 
 
             params.push_back(std::move(info));
         }
-    } catch (const nlohmann::json::exception& e) {
+    } catch (const nlohmann::json::exception &e) {
         // JSON parsing failed - return empty vector
         // In production, might want to log this error
         return params;
@@ -296,201 +297,56 @@ std::string_view TemplateInvocation::get_or(std::string_view param_name, std::st
 // ============================================================================
 
 Result<TemplateInvocation> parse_invocation(std::string_view input) {
-    TemplateInvocation inv;
-
-    // Trim whitespace
-    size_t start = input.find_first_not_of(" \t\n");
-    if (start == std::string_view::npos) {
-        return std::unexpected(ParseError{"Empty template invocation", {}, ErrorSeverity::Error, ""});
-    }
-
-    input = input.substr(start);
-
-    // Check for {{ prefix
-    if (!input.starts_with("{{")) {
+    input = detail::trim(input);
+    if (!input.starts_with("{{") || input.starts_with("{{{"))
         return std::unexpected(ParseError{"Template invocation must start with {{", {}, ErrorSeverity::Error, ""});
-    }
-
-    input = input.substr(2);
-
-    // Find matching }}
-    int depth = 1;
-    size_t end = 0;
-    while (end < input.size() && depth > 0) {
-        if (input[end] == '{' && end + 1 < input.size() && input[end + 1] == '{') {
-            depth++;
-            end += 2;
-        } else if (input[end] == '}' && end + 1 < input.size() && input[end + 1] == '}') {
-            depth--;
-            if (depth == 0)
-                break;
-            end += 2;
+    const auto end = detail::brace_end(input, 0);
+    if (end == input.npos)
+        return std::unexpected(ParseError{"Unclosed template invocation", {}, ErrorSeverity::Error, ""});
+    auto parts = detail::split(input.substr(2, end - 4), '|');
+    TemplateInvocation inv;
+    inv.name = detail::trim(parts.front());
+    if (inv.name.empty())
+        return std::unexpected(ParseError{"Empty template name", {}, ErrorSeverity::Error, ""});
+    const bool function = inv.name.starts_with('#');
+    for (size_t i = 1; i < parts.size(); ++i) {
+        const auto equals = detail::split(parts[i], '=');
+        if (!function && equals.size() > 1) {
+            const auto offset = equals.front().size();
+            inv.parameters.emplace_back(detail::trim(equals.front()), detail::trim(parts[i].substr(offset + 1)));
         } else {
-            ++end;
+            inv.parameters.emplace_back("", detail::trim(parts[i]));
         }
     }
-
-    std::string_view content = input.substr(0, end);
-
-    // Parse template name (until first |)
-    size_t pipe_pos = std::string_view::npos;
-    depth = 0;
-    for (size_t i = 0; i < content.size(); ++i) {
-        char c = content[i];
-        if (c == '{' && i + 1 < content.size() && content[i + 1] == '{') {
-            depth++;
-            ++i;
-        } else if (c == '}' && i + 1 < content.size() && content[i + 1] == '}') {
-            depth--;
-            ++i;
-        } else if (c == '|' && depth == 0) {
-            pipe_pos = i;
-            break;
-        }
-    }
-
-    std::string_view name_part;
-    std::string_view params_part;
-
-    if (pipe_pos != std::string_view::npos) {
-        name_part = content.substr(0, pipe_pos);
-        params_part = content.substr(pipe_pos + 1);
-    } else {
-        name_part = content;
-    }
-
-    // Trim name
-    size_t name_start = name_part.find_first_not_of(" \t\n");
-    size_t name_end = name_part.find_last_not_of(" \t\n");
-    if (name_start != std::string_view::npos && name_end != std::string_view::npos) {
-        inv.name = std::string(name_part.substr(name_start, name_end - name_start + 1));
-    }
-
-    // Parse parameters
-    if (!params_part.empty()) {
-        size_t param_start = 0;
-        depth = 0;
-
-        for (size_t i = 0; i <= params_part.size(); ++i) {
-            bool at_end = (i == params_part.size());
-            char c = at_end ? '\0' : params_part[i];
-
-            if (!at_end && c == '{' && i + 1 < params_part.size() && params_part[i + 1] == '{') {
-                depth++;
-                ++i;
-            } else if (!at_end && c == '}' && i + 1 < params_part.size() && params_part[i + 1] == '}') {
-                depth--;
-                ++i;
-            } else if ((c == '|' && depth == 0) || at_end) {
-                std::string_view param = params_part.substr(param_start, i - param_start);
-
-                // Find = for named parameter
-                size_t eq_pos = std::string_view::npos;
-                int eq_depth = 0;
-                for (size_t j = 0; j < param.size(); ++j) {
-                    if (param[j] == '{' && j + 1 < param.size() && param[j + 1] == '{') {
-                        eq_depth++;
-                        ++j;
-                    } else if (param[j] == '}' && j + 1 < param.size() && param[j + 1] == '}') {
-                        eq_depth--;
-                        ++j;
-                    } else if (param[j] == '=' && eq_depth == 0) {
-                        eq_pos = j;
-                        break;
-                    }
-                }
-
-                std::string param_name;
-                std::string param_value;
-
-                if (eq_pos != std::string_view::npos) {
-                    std::string_view name_sv = param.substr(0, eq_pos);
-                    std::string_view value_sv = param.substr(eq_pos + 1);
-
-                    // Trim
-                    size_t ns = name_sv.find_first_not_of(" \t\n");
-                    size_t ne = name_sv.find_last_not_of(" \t\n");
-                    if (ns != std::string_view::npos && ne != std::string_view::npos) {
-                        param_name = std::string(name_sv.substr(ns, ne - ns + 1));
-                    }
-
-                    size_t vs = value_sv.find_first_not_of(" \t\n");
-                    size_t ve = value_sv.find_last_not_of(" \t\n");
-                    if (vs != std::string_view::npos && ve != std::string_view::npos) {
-                        param_value = std::string(value_sv.substr(vs, ve - vs + 1));
-                    } else {
-                        param_value = "";
-                    }
-                } else {
-                    // Positional parameter - trim value only
-                    size_t vs = param.find_first_not_of(" \t\n");
-                    size_t ve = param.find_last_not_of(" \t\n");
-                    if (vs != std::string_view::npos && ve != std::string_view::npos) {
-                        param_value = std::string(param.substr(vs, ve - vs + 1));
-                    }
-                }
-
-                inv.parameters.emplace_back(std::move(param_name), std::move(param_value));
-                param_start = i + 1;
-            }
-        }
-    }
-
     return inv;
 }
 
 std::vector<TemplateInvocation> find_invocations(std::string_view input) {
     std::vector<TemplateInvocation> invocations;
-
-    size_t pos = 0;
-    while (pos < input.size()) {
-        size_t start = input.find("{{", pos);
-        if (start == std::string_view::npos) {
-            break;
-        }
-
-        // Skip {{{ (parameter)
-        if (start + 2 < input.size() && input[start + 2] == '{') {
-            pos = start + 3;
+    for (size_t pos = 0; pos < input.size();) {
+        if (const auto end = detail::opaque_end(input, pos); end != pos) {
+            pos = end;
             continue;
         }
-
-        // Find matching }}
-        int depth = 1;
-        size_t end = start + 2;
-        while (end < input.size() && depth > 0) {
-            if (input[end] == '{' && end + 1 < input.size() && input[end + 1] == '{') {
-                if (end + 2 < input.size() && input[end + 2] == '{') {
-                    // Skip {{{
-                    end += 3;
-                    continue;
-                }
-                depth++;
-                end += 2;
-            } else if (input[end] == '}' && end + 1 < input.size() && input[end + 1] == '}') {
-                if (end + 2 < input.size() && input[end + 2] == '}' && depth == 1) {
-                    // This might be }}} - check context
-                }
-                depth--;
-                end += 2;
-            } else {
-                ++end;
-            }
+        if (!input.substr(pos).starts_with("{{")) {
+            ++pos;
+            continue;
         }
-
-        if (depth == 0) {
-            std::string_view invocation_text = input.substr(start, end - start);
-            auto result = parse_invocation(invocation_text);
+        const auto end = detail::brace_end(input, pos);
+        if (end == input.npos) {
+            pos += 2;
+            continue;
+        }
+        if (!input.substr(pos).starts_with("{{{")) {
+            auto result = parse_invocation(input.substr(pos, end - pos));
             if (result) {
-                result->location.begin.offset = start;
+                result->location.begin.offset = pos;
                 result->location.end.offset = end;
                 invocations.push_back(std::move(*result));
             }
         }
-
-        pos = (depth == 0) ? end : start + 2;
+        pos = end;
     }
-
     return invocations;
 }
 
@@ -512,10 +368,7 @@ bool is_parser_function(std::string_view name) noexcept {
         lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     }
 
-    // Remove trailing colon if present
-    if (!lower.empty() && lower.back() == ':') {
-        lower.pop_back();
-    }
+    lower.resize(lower.find(':') == lower.npos ? lower.size() : lower.find(':'));
 
     static const std::unordered_map<std::string, bool> functions = {
             {"if", true},        {"ifeq", true},    {"ifexist", true},    {"ifexpr", true},    {"switch", true},
@@ -542,10 +395,7 @@ ParserFunction get_parser_function(std::string_view name) noexcept {
         lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     }
 
-    // Remove trailing colon
-    if (!lower.empty() && lower.back() == ':') {
-        lower.pop_back();
-    }
+    lower.resize(lower.find(':') == lower.npos ? lower.size() : lower.find(':'));
 
     if (lower == "if")
         return ParserFunction::If;

@@ -9,8 +9,13 @@
 #include <cmath>
 #include <ctime>
 #include <iomanip>
+#include <limits>
+#include <locale>
 #include <sstream>
-#include <stack>
+#include <stdexcept>
+#include "expansion_syntax.h"
+#include "expression.h"
+#include "wikilib/markup/parser.h"
 #include "wikilib/templates/template_parser.h"
 
 namespace wikilib::templates {
@@ -55,6 +60,27 @@ std::optional<std::string_view> ExpansionContext::get_param(std::string_view nam
     return std::nullopt;
 }
 
+namespace {
+bool supported_magic_word(MagicWord word) {
+    switch (word) {
+        case MagicWord::PageName:
+        case MagicWord::FullPageName:
+        case MagicWord::BasePageName:
+        case MagicWord::SubPageName:
+        case MagicWord::RootPageName:
+        case MagicWord::NameSpace:
+        case MagicWord::CurrentYear:
+        case MagicWord::CurrentMonth:
+        case MagicWord::CurrentDay:
+        case MagicWord::CurrentTime:
+        case MagicWord::CurrentTimestamp:
+            return true;
+        default:
+            return false;
+    }
+}
+} // namespace
+
 // ============================================================================
 // TemplateExpander implementation
 // ============================================================================
@@ -63,468 +89,334 @@ TemplateExpander::TemplateExpander(std::shared_ptr<TemplateProvider> provider, E
     provider_(std::move(provider)), config_(std::move(config)) {
 }
 
-Result<std::string> TemplateExpander::expand(std::string_view input, const PageInfo &page) {
-    ExpansionContext context;
-    context.page = page;
-    context.depth = 0;
-    context.max_depth = config_.max_depth;
+Result<std::string> TemplateExpander::run_operation(const std::function<std::string()> &action) {
+    const bool root = !operation_active_;
+    if (root) {
+        operation_active_ = true;
+        operation_expansions_ = 0;
+        cache_.clear();
+    }
+
+    struct Guard {
+        TemplateExpander &self;
+        bool root;
+
+        ~Guard() {
+            if (root) {
+                self.operation_active_ = false;
+                self.cache_.clear();
+            }
+        }
+    } guard{*this, root};
 
     try {
-        std::string result = expand_recursive(input, context);
+        if (config_.max_depth < 0 || config_.max_expansions < 0)
+            throw std::invalid_argument("Expansion limits must be nonnegative");
+        auto result = action();
+        if (result.size() > config_.max_output_bytes)
+            throw std::runtime_error("Maximum expansion output size exceeded");
         return result;
     } catch (const std::exception &e) {
+        ++stats_.errors;
         return std::unexpected(ParseError{std::string("Expansion error: ") + e.what(), {}, ErrorSeverity::Error, ""});
     }
 }
 
-Result<void> TemplateExpander::expand_ast([[maybe_unused]] markup::DocumentNode &doc, const PageInfo &page) {
-    // Walk the AST and expand template nodes
+void TemplateExpander::append(std::string &output, std::string_view text) const {
+    if (output.size() > config_.max_output_bytes || text.size() > config_.max_output_bytes - output.size())
+        throw std::runtime_error("Maximum expansion output size exceeded");
+    output.append(text);
+}
+
+void TemplateExpander::consume_expansion(const ExpansionContext &context) {
+    if (context.depth < 0 || context.max_depth < 0)
+        throw std::invalid_argument("Invalid expansion context depth");
+    if (context.depth >= std::min(context.max_depth, config_.max_depth))
+        throw std::runtime_error("Maximum template recursion depth exceeded");
+    if (operation_expansions_ >= config_.max_expansions)
+        throw std::runtime_error("Maximum expansion count exceeded");
+    ++operation_expansions_;
+    stats_.max_depth_reached = std::max(stats_.max_depth_reached, context.depth + 1);
+}
+
+Result<std::string> TemplateExpander::expand(std::string_view input, const PageInfo &page) {
     ExpansionContext context;
     context.page = page;
-    context.depth = 0;
     context.max_depth = config_.max_depth;
+    return run_operation([&] { return expand_recursive(input, context); });
+}
 
-    // This is a simplified implementation
-    // Full implementation would recursively process template nodes
-
-    return {};
+Result<void> TemplateExpander::expand_ast(markup::DocumentNode &doc, const PageInfo &page) {
+    try {
+        // Reparse after expansion so generated block markup becomes AST nodes.
+        auto expanded = expand(doc.to_wikitext(), page);
+        if (!expanded)
+            return std::unexpected(expanded.error());
+        markup::ParserConfig config;
+        config.preserve_whitespace = true;
+        config.tokenizer.preserve_comments = true;
+        markup::Parser parser(config);
+        auto parsed = parser.parse(*expanded, page);
+        if (!parsed.document || parsed.has_errors()) {
+            ++stats_.errors;
+            return std::unexpected(parsed.errors.empty()
+                                           ? ParseError{"Expanded AST parse failed", {}, ErrorSeverity::Error, ""}
+                                           : parsed.errors.front());
+        }
+        auto &replacement = *parsed.document;
+        replacement.categories.clear();
+        replacement.redirect = nullptr;
+        std::function<void(markup::Node &, markup::Node *)> repair = [&](markup::Node &node, markup::Node *parent) {
+            node.parent = parent;
+            if (node.type == markup::NodeType::Category)
+                replacement.categories.push_back(static_cast<markup::CategoryNode *>(&node));
+            if (node.type == markup::NodeType::Redirect)
+                replacement.redirect = static_cast<markup::RedirectNode *>(&node);
+            for (auto &child: node.children())
+                repair(*child, &node);
+            if (node.type == markup::NodeType::Template)
+                for (auto &param: static_cast<markup::TemplateNode &>(node).parameters)
+                    for (auto &child: param.value)
+                        repair(*child, &node);
+        };
+        for (auto &node: replacement.content)
+            repair(*node, &doc);
+        doc.content = std::move(replacement.content);
+        doc.categories = std::move(replacement.categories);
+        doc.redirect = replacement.redirect;
+        doc.location = replacement.location;
+        return {};
+    } catch (const std::exception &error) {
+        ++stats_.errors;
+        return std::unexpected(
+                ParseError{std::string("AST expansion error: ") + error.what(), {}, ErrorSeverity::Error, ""});
+    }
 }
 
 Result<std::string> TemplateExpander::expand_template(const TemplateInvocation &invocation,
                                                       const ExpansionContext &context) {
-    if (context.depth >= context.max_depth) {
-        stats_.errors++;
-        if (config_.fail_on_missing) {
-            return std::unexpected(ParseError{"Maximum template recursion depth exceeded", invocation.location,
-                                              ErrorSeverity::Error, ""});
-        }
-        return "{{" + invocation.name + "}}";
-    }
+    return run_operation([&] { return expand_one(invocation, context); });
+}
 
-    // Check for parser function
-    if (is_parser_function(invocation.name)) {
-        ParserFunction func = get_parser_function(invocation.name);
+std::string TemplateExpander::expand_one(const TemplateInvocation &invocation, const ExpansionContext &context) {
+    consume_expansion(context);
+    const auto nested = [&](std::string_view text) {
+        auto child = context;
+        ++child.depth;
+        return expand_recursive(text, child);
+    };
+    const auto preserve = [&] {
+        std::string text = "{{" + invocation.name;
+        for (const auto &[key, value]: invocation.parameters) {
+            append(text, "|");
+            if (!key.empty()) {
+                append(text, key);
+                append(text, "=");
+            }
+            append(text, value);
+        }
+        append(text, "}}");
+        return config_.preserve_unknown ? text : std::string{};
+    };
+    const auto raw_name = detail::trim(invocation.name);
+    if (raw_name.starts_with('#')) {
+        const auto colon = raw_name.find(':');
+        const auto func = get_parser_function(raw_name.substr(0, colon));
+        if (!config_.expand_parser_functions || func == ParserFunction::Unknown || func == ParserFunction::Invoke ||
+            func == ParserFunction::Titleparts || func == ParserFunction::Language)
+            return preserve();
         std::vector<std::string> args;
-        for (const auto &[name, value]: invocation.parameters) {
-            args.push_back(value);
+        if (colon != raw_name.npos)
+            args.emplace_back(raw_name.substr(colon + 1));
+        for (const auto &[key, value]: invocation.parameters)
+            args.push_back(key.empty() ? value : key + "=" + value);
+        // Evaluate only the arguments needed by the selected function/branch.
+        return evaluate_function(func, args, context);
+    }
+    auto name = std::string(detail::trim(nested(invocation.name)));
+    if (name.starts_with("Template:"))
+        name.erase(0, 9);
+    const auto word = get_magic_word(name);
+    if (word != MagicWord::Unknown)
+        return supported_magic_word(word) ? evaluate_magic_word(word, context) : preserve();
+    if (!provider_)
+        throw std::runtime_error("Template provider is required");
+    auto found = cache_.find(name);
+    if (found == cache_.end()) {
+        auto content = provider_->get_template(name);
+        if (!content) {
+            if (config_.fail_on_missing)
+                throw std::runtime_error("Template not found: " + name);
+            return preserve();
         }
-        return evaluate_parser_function(func, args, context);
+        found = cache_.emplace(name, std::move(*content)).first;
+    } else
+        ++stats_.cache_hits;
+    // Copy before nested lookups, since unordered_map rehash invalidates iterators.
+    const std::string definition = found->second;
+    ExpansionContext child = context;
+    ++child.depth;
+    child.parameters.clear();
+    size_t positional = 1;
+    for (const auto &[key, value]: invocation.parameters) {
+        const auto parameter_name = key.empty() ? std::to_string(positional++) : std::string(detail::trim(nested(key)));
+        child.parameters[parameter_name] = nested(value);
     }
-
-    // Check cache
-    std::string cache_key = invocation.name;
-    for (const auto &[name, value]: invocation.parameters) {
-        cache_key += "|" + name + "=" + value;
-    }
-
-    auto cache_it = cache_.find(cache_key);
-    if (cache_it != cache_.end()) {
-        stats_.cache_hits++;
-        return cache_it->second;
-    }
-
-    // Get template content
-    auto template_content = provider_->get_template(invocation.name);
-    if (!template_content) {
-        stats_.errors++;
-        if (config_.fail_on_missing) {
-            return std::unexpected(ParseError{"Template not found: " + invocation.name, invocation.location,
-                                              ErrorSeverity::Error, ""});
-        }
-        if (config_.preserve_unknown) {
-            return "{{" + invocation.name + "}}";
-        }
-        return "";
-    }
-
-    // Create new context with parameters
-    ExpansionContext new_context = context;
-    new_context.depth = context.depth + 1;
-    new_context.parameters.clear();
-
-    size_t positional_index = 1;
-    for (const auto &[name, value]: invocation.parameters) {
-        if (name.empty()) {
-            new_context.parameters[std::to_string(positional_index)] = value;
-            ++positional_index;
-        } else {
-            new_context.parameters[name] = value;
-        }
-    }
-
-    // Expand the template content
-    std::string result = expand_recursive(*template_content, new_context);
-
-    stats_.templates_expanded++;
-    if (new_context.depth > stats_.max_depth_reached) {
-        stats_.max_depth_reached = new_context.depth;
-    }
-
-    // Cache result
-    cache_[cache_key] = result;
-
-    return result;
+    ++stats_.templates_expanded;
+    return expand_recursive(definition, child);
 }
 
 Result<std::string> TemplateExpander::evaluate_parser_function(ParserFunction func,
                                                                const std::vector<std::string> &args,
                                                                const ExpansionContext &context) {
-    if (!config_.expand_parser_functions) {
-        // Reconstruct the function call
-        std::string result = "{{" + std::string(parser_function_name(func));
-        for (const auto &arg: args) {
-            result += "|" + arg;
+    return run_operation([&] {
+        consume_expansion(context);
+        if (!config_.expand_parser_functions || func == ParserFunction::Invoke || func == ParserFunction::Unknown ||
+            func == ParserFunction::Titleparts || func == ParserFunction::Language) {
+            if (!config_.preserve_unknown)
+                return std::string{};
+            std::string text = "{{" + std::string(parser_function_name(func));
+            if (!args.empty()) {
+                append(text, ":");
+                append(text, args.front());
+            }
+            for (size_t i = 1; i < args.size(); ++i) {
+                append(text, "|");
+                append(text, args[i]);
+            }
+            append(text, "}}");
+            return text;
         }
-        result += "}}";
-        return result;
-    }
+        return evaluate_function(func, args, context);
+    });
+}
 
-    stats_.parser_functions_evaluated++;
-
+std::string TemplateExpander::evaluate_function(ParserFunction func, const std::vector<std::string> &args,
+                                                const ExpansionContext &context) {
+    ++stats_.parser_functions_evaluated;
+    const auto arg = [&](size_t index) {
+        if (index >= args.size())
+            return std::string{};
+        auto child = context;
+        ++child.depth;
+        return expand_recursive(args[index], child);
+    };
     switch (func) {
         case ParserFunction::If:
-            return evaluate_if(args);
+            return arg(detail::trim(arg(0)).empty() ? 2 : 1);
         case ParserFunction::Ifeq:
-            return evaluate_ifeq(args);
-        case ParserFunction::Switch:
-            return evaluate_switch(args);
-        case ParserFunction::Expr:
-            return evaluate_expr(args);
-        case ParserFunction::Time:
-            return evaluate_time(args, context);
-        case ParserFunction::Ifexist:
-            if (args.empty())
-                return "";
-            if (provider_->template_exists(args[0])) {
-                return args.size() > 1 ? args[1] : "";
-            }
-            return args.size() > 2 ? args[2] : "";
+            return arg(detail::trim(arg(0)) == detail::trim(arg(1)) ? 2 : 3);
         case ParserFunction::Ifexpr:
-            if (args.empty())
-                return "";
-            // Simplified: treat as #if for non-zero result
-            {
-                std::string expr_result = evaluate_expr({args[0]});
-                bool is_true = !expr_result.empty() && expr_result != "0";
-                if (is_true) {
-                    return args.size() > 1 ? args[1] : "";
+            return arg(detail::Expression(arg(0)).evaluate() == 0 ? 2 : 1);
+        case ParserFunction::Expr:
+            return evaluate_expr({arg(0)});
+        case ParserFunction::Ifexist:
+            if (!provider_)
+                throw std::runtime_error("Template provider is required");
+            return arg(provider_->template_exists(detail::trim(arg(0))) ? 1 : 2);
+        case ParserFunction::Switch: {
+            const auto comparison = std::string(detail::trim(arg(0)));
+            std::string fallback;
+            bool matched = false;
+            for (size_t i = 1; i < args.size(); ++i) {
+                const auto pieces = detail::split(args[i], '=');
+                if (pieces.size() == 1) {
+                    if (detail::trim(arg(i)) == comparison)
+                        matched = true;
+                    if (i + 1 == args.size())
+                        fallback = args[i];
+                    continue;
                 }
-                return args.size() > 2 ? args[2] : "";
+                auto child = context;
+                ++child.depth;
+                const auto key = std::string(detail::trim(expand_recursive(pieces.front(), child)));
+                const auto value = args[i].substr(pieces.front().size() + 1);
+                if (key == "#default")
+                    fallback = value;
+                else if (matched || key == comparison)
+                    return expand_recursive(value, child);
             }
-        case ParserFunction::Invoke:
-            // Lua modules not supported without Lua runtime
-            return args.empty() ? "" : "{{#invoke:" + args[0] + "}}";
-        case ParserFunction::Tag:
-            if (args.empty())
-                return "";
-            {
-                std::string tag = args[0];
-                std::string content = args.size() > 1 ? args[1] : "";
-                return "<" + tag + ">" + content + "</" + tag + ">";
-            }
-        case ParserFunction::Language:
-            // Return language code as-is
-            return args.empty() ? "" : args[0];
-        case ParserFunction::Titleparts:
-            if (args.empty())
-                return "";
-            {
-                std::string title = args[0];
-                // Simplified: just return the title
-                return title;
-            }
+            auto child = context;
+            ++child.depth;
+            return expand_recursive(fallback, child);
+        }
+        case ParserFunction::Time: {
+            if (args.size() > 1)
+                throw std::runtime_error("#time date/language arguments are unsupported");
+            return evaluate_time({arg(0)}, context);
+        }
+        case ParserFunction::Tag: {
+            if (args.size() > 2)
+                throw std::runtime_error("#tag attributes are unsupported");
+            const auto tag = arg(0);
+            if (tag.empty())
+                throw std::runtime_error("#tag requires a tag name");
+            std::string text = "<" + tag + ">";
+            append(text, arg(1));
+            append(text, "</" + tag + ">");
+            return text;
+        }
         default:
-            return "";
+            throw std::runtime_error("Unsupported parser function");
     }
 }
 
 std::string TemplateExpander::expand_recursive(std::string_view input, ExpansionContext &context) {
-    if (stats_.templates_expanded + stats_.parser_functions_evaluated > config_.max_expansions) {
-        return std::string(input);
-    }
-
+    if (context.depth > std::min(context.max_depth, config_.max_depth))
+        throw std::runtime_error("Maximum template recursion depth exceeded");
     std::string result;
-    result.reserve(input.size());
-
     size_t pos = 0;
     while (pos < input.size()) {
-        // Look for {{{ (parameter) first
-        size_t param_start = input.find("{{{", pos);
-        size_t template_start = input.find("{{", pos);
-
-        // Skip {{{{ which is escaped
-        while (template_start != std::string_view::npos && template_start + 2 < input.size() &&
-               input[template_start + 2] == '{' &&
-               (template_start + 3 >= input.size() || input[template_start + 3] != '{')) {
-            // This is {{{ (parameter), not {{
-            if (param_start == template_start) {
-                break;
-            }
-            template_start = input.find("{{", template_start + 2);
-        }
-
-        // Handle parameter references {{{name}}}
-        if (param_start != std::string_view::npos &&
-            (template_start == std::string_view::npos || param_start < template_start)) {
-            result += input.substr(pos, param_start - pos);
-
-            // Find closing }}}
-            int depth = 1;
-            size_t end = param_start + 3;
-            while (end < input.size() && depth > 0) {
-                if (end + 2 < input.size() && input[end] == '{' && input[end + 1] == '{' && input[end + 2] == '{') {
-                    depth++;
-                    end += 3;
-                } else if (end + 2 < input.size() && input[end] == '}' && input[end + 1] == '}' &&
-                           input[end + 2] == '}') {
-                    depth--;
-                    if (depth == 0)
-                        break;
-                    end += 3;
-                } else {
-                    ++end;
-                }
-            }
-
-            if (depth == 0) {
-                std::string_view param_content = input.substr(param_start + 3, end - param_start - 3);
-
-                // Split by | for default value
-                size_t pipe_pos = param_content.find('|');
-                std::string_view param_name;
-                std::string_view default_value;
-
-                if (pipe_pos != std::string_view::npos) {
-                    param_name = param_content.substr(0, pipe_pos);
-                    default_value = param_content.substr(pipe_pos + 1);
-                } else {
-                    param_name = param_content;
-                }
-
-                // Trim whitespace
-                while (!param_name.empty() && std::isspace(static_cast<unsigned char>(param_name.front()))) {
-                    param_name.remove_prefix(1);
-                }
-                while (!param_name.empty() && std::isspace(static_cast<unsigned char>(param_name.back()))) {
-                    param_name.remove_suffix(1);
-                }
-
-                auto value = context.get_param(param_name);
-                if (value) {
-                    result += *value;
-                } else if (!default_value.empty()) {
-                    result += expand_recursive(default_value, context);
-                } else {
-                    // Keep unexpanded
-                    result += input.substr(param_start, end + 3 - param_start);
-                }
-
-                pos = end + 3;
-            } else {
-                result += input.substr(pos, 3);
-                pos = param_start + 3;
-            }
+        if (const auto end = detail::opaque_end(input, pos); end != pos) {
+            append(result, input.substr(pos, end - pos));
+            pos = end;
             continue;
         }
-
-        // Handle templates {{name}}
-        if (template_start != std::string_view::npos) {
-            result += input.substr(pos, template_start - pos);
-
-            // Skip {{{ which is parameter
-            if (template_start + 2 < input.size() && input[template_start + 2] == '{') {
-                result += "{{";
-                pos = template_start + 2;
-                continue;
-            }
-
-            // Find matching }}
-            int depth = 1;
-            size_t end = template_start + 2;
-            while (end < input.size() && depth > 0) {
-                if (end + 1 < input.size() && input[end] == '{' && input[end + 1] == '{') {
-                    if (end + 2 < input.size() && input[end + 2] == '{') {
-                        // Skip {{{
-                        end += 3;
-                        continue;
-                    }
-                    depth++;
-                    end += 2;
-                } else if (end + 1 < input.size() && input[end] == '}' && input[end + 1] == '}') {
-                    depth--;
-                    if (depth == 0)
-                        break;
-                    end += 2;
-                } else {
-                    ++end;
-                }
-            }
-
-            if (depth == 0) {
-                std::string_view template_text = input.substr(template_start, end + 2 - template_start);
-                auto invocation_result = parse_invocation(template_text);
-
-                if (invocation_result) {
-                    auto expanded = expand_template(*invocation_result, context);
-                    if (expanded) {
-                        // Recursively expand the result
-                        result += expand_recursive(*expanded, context);
-                    } else {
-                        result += template_text;
-                    }
-                } else {
-                    result += template_text;
-                }
-
-                pos = end + 2;
-            } else {
-                result += "{{";
-                pos = template_start + 2;
-            }
-        } else {
-            // No more templates
-            result += input.substr(pos);
+        if (!input.substr(pos).starts_with("{{")) {
+            append(result, input.substr(pos++, 1));
+            continue;
+        }
+        const auto end = detail::brace_end(input, pos);
+        if (end == input.npos) {
+            append(result, input.substr(pos));
             break;
         }
-    }
-
-    return result;
-}
-
-std::string TemplateExpander::evaluate_if(const std::vector<std::string> &args) {
-    if (args.empty())
-        return "";
-
-    // Trim and check condition
-    std::string condition = args[0];
-    size_t start = condition.find_first_not_of(" \t\n\r");
-    size_t end = condition.find_last_not_of(" \t\n\r");
-
-    bool is_true = (start != std::string::npos && end != std::string::npos && start <= end);
-
-    if (is_true) {
-        return args.size() > 1 ? args[1] : "";
-    }
-    return args.size() > 2 ? args[2] : "";
-}
-
-std::string TemplateExpander::evaluate_ifeq(const std::vector<std::string> &args) {
-    if (args.size() < 2)
-        return "";
-
-    // Trim both values
-    auto trim = [](const std::string &s) -> std::string {
-        size_t start = s.find_first_not_of(" \t\n\r");
-        size_t end = s.find_last_not_of(" \t\n\r");
-        if (start == std::string::npos)
-            return "";
-        return s.substr(start, end - start + 1);
-    };
-
-    std::string val1 = trim(args[0]);
-    std::string val2 = trim(args[1]);
-
-    if (val1 == val2) {
-        return args.size() > 2 ? args[2] : "";
-    }
-    return args.size() > 3 ? args[3] : "";
-}
-
-std::string TemplateExpander::evaluate_switch(const std::vector<std::string> &args) {
-    if (args.empty())
-        return "";
-
-    auto trim = [](const std::string &s) -> std::string {
-        size_t start = s.find_first_not_of(" \t\n\r");
-        size_t end = s.find_last_not_of(" \t\n\r");
-        if (start == std::string::npos)
-            return "";
-        return s.substr(start, end - start + 1);
-    };
-
-    std::string comparison = trim(args[0]);
-    std::string default_value;
-    std::string fallthrough_value;
-    bool found_match = false;
-
-    for (size_t i = 1; i < args.size(); ++i) {
-        const std::string &arg = args[i];
-        size_t eq_pos = arg.find('=');
-
-        if (eq_pos != std::string::npos) {
-            std::string case_val = trim(arg.substr(0, eq_pos));
-            std::string result_val = arg.substr(eq_pos + 1);
-
-            if (case_val == "#default") {
-                default_value = result_val;
-            } else if (case_val == comparison || found_match) {
-                return result_val;
-            }
+        const auto original = input.substr(pos, end - pos);
+        if (original.starts_with("{{{")) {
+            consume_expansion(context);
+            const auto pieces = detail::split(original.substr(3, original.size() - 6), '|');
+            auto child = context;
+            ++child.depth;
+            const auto name = std::string(detail::trim(expand_recursive(pieces.front(), child)));
+            if (auto value = context.get_param(name))
+                append(result, *value);
+            else if (pieces.size() > 1)
+                append(result, expand_recursive(original.substr(3 + pieces.front().size() + 1,
+                                                                original.size() - 7 - pieces.front().size()),
+                                                child));
+            else
+                append(result, original);
         } else {
-            // Fallthrough case
-            std::string case_val = trim(arg);
-            if (case_val == comparison) {
-                found_match = true;
-            }
+            auto invocation = parse_invocation(original);
+            if (!invocation)
+                throw std::runtime_error(invocation.error().message);
+            append(result, expand_one(*invocation, context));
         }
+        pos = end;
     }
-
-    return default_value;
+    return result;
 }
 
 std::string TemplateExpander::evaluate_expr(const std::vector<std::string> &args) {
     if (args.empty())
-        return "";
-
-    std::string expr = args[0];
-
-    // Remove whitespace
-    expr.erase(std::remove_if(expr.begin(), expr.end(), [](unsigned char c) { return std::isspace(c); }), expr.end());
-
-    if (expr.empty())
-        return "";
-
-    // Simple expression evaluator for basic arithmetic
-    // This is a simplified implementation
-    try {
-        // Handle simple numbers
-        bool all_digits = true;
-        bool has_dot = false;
-        size_t start = 0;
-
-        if (!expr.empty() && (expr[0] == '+' || expr[0] == '-')) {
-            start = 1;
-        }
-
-        for (size_t i = start; i < expr.size(); ++i) {
-            if (expr[i] == '.') {
-                if (has_dot) {
-                    all_digits = false;
-                    break;
-                }
-                has_dot = true;
-            } else if (!std::isdigit(static_cast<unsigned char>(expr[i]))) {
-                all_digits = false;
-                break;
-            }
-        }
-
-        if (all_digits && !expr.empty() && (start < expr.size())) {
-            double val = std::stod(expr);
-            if (val == std::floor(val) && std::abs(val) < 1e15) {
-                return std::to_string(static_cast<long long>(val));
-            }
-            std::ostringstream oss;
-            oss << std::setprecision(10) << val;
-            return oss.str();
-        }
-
-        // For complex expressions, return as-is or 0
-        // Full implementation would need expression parser
+        throw std::runtime_error("Expression error: expected expression");
+    const double value = detail::Expression(args.front()).evaluate();
+    if (value == 0)
         return "0";
-    } catch (...) {
-        return "0";
-    }
+    std::ostringstream result;
+    result.imbue(std::locale::classic());
+    result << std::setprecision(std::numeric_limits<double>::digits10) << value;
+    return result.str();
 }
 
 std::string TemplateExpander::evaluate_time(const std::vector<std::string> &args, const ExpansionContext &ctx) {
@@ -535,7 +427,8 @@ std::string TemplateExpander::evaluate_time(const std::vector<std::string> &args
 
     std::string format = args[0];
     std::time_t now = std::time(nullptr);
-    std::tm *tm = std::gmtime(&now);
+    std::tm tm_storage{};
+    std::tm *tm = ::gmtime_r(&now, &tm_storage);
 
     if (!tm)
         return "";
@@ -683,141 +576,53 @@ MagicWord get_magic_word(std::string_view name) noexcept {
 }
 
 std::string evaluate_magic_word(MagicWord word, const ExpansionContext &context) {
-    std::time_t now = std::time(nullptr);
-    std::tm *tm = std::gmtime(&now);
-
-    auto url_encode = [](const std::string &s) -> std::string {
-        std::string result;
-        for (char c: s) {
-            if (c == ' ') {
-                result += '_';
-            } else {
-                result += c;
-            }
+    std::string title = context.page.title;
+    std::string ns;
+    if (context.page.namespace_id != 0) {
+        const auto colon = title.find(':');
+        if (colon != title.npos) {
+            ns = title.substr(0, colon);
+            title.erase(0, colon + 1);
         }
-        return result;
-    };
-
+    }
     switch (word) {
         case MagicWord::PageName:
-            return context.page.title;
-
-        case MagicWord::PageNameE:
-            return url_encode(context.page.title);
-
+            return title;
         case MagicWord::FullPageName:
             return context.page.full_title();
-
-        case MagicWord::FullPageNameE:
-            return url_encode(context.page.full_title());
-
         case MagicWord::BasePageName: {
-            const std::string &title = context.page.title;
-            size_t slash = title.rfind('/');
-            if (slash != std::string::npos) {
-                return title.substr(0, slash);
-            }
-            return title;
+            const auto slash = title.rfind('/');
+            return slash == title.npos ? title : title.substr(0, slash);
         }
-
         case MagicWord::SubPageName: {
-            const std::string &title = context.page.title;
-            size_t slash = title.rfind('/');
-            if (slash != std::string::npos) {
-                return title.substr(slash + 1);
-            }
-            return title;
+            const auto slash = title.rfind('/');
+            return slash == title.npos ? title : title.substr(slash + 1);
         }
-
-        case MagicWord::RootPageName: {
-            const std::string &title = context.page.title;
-            size_t slash = title.find('/');
-            if (slash != std::string::npos) {
-                return title.substr(0, slash);
-            }
-            return title;
-        }
-
-        case MagicWord::TalkPageName:
-            return "Talk:" + context.page.title;
-
-        case MagicWord::SubjectPageName:
-            return context.page.title;
-
+        case MagicWord::RootPageName:
+            return title.substr(0, title.find('/'));
         case MagicWord::NameSpace:
-            // Simplified - return empty for main namespace
-            return "";
-
-        case MagicWord::NameSpaceE:
-            return "";
-
-        case MagicWord::TalkSpace:
-            return "Talk";
-
-        case MagicWord::SubjectSpace:
-            return "";
-
+            return ns;
         case MagicWord::CurrentYear:
-            if (tm) {
-                return std::to_string(1900 + tm->tm_year);
-            }
-            return "";
-
         case MagicWord::CurrentMonth:
-            if (tm) {
-                char buf[16];
-                std::snprintf(buf, sizeof(buf), "%02d", tm->tm_mon + 1);
-                return buf;
-            }
-            return "";
-
         case MagicWord::CurrentDay:
-            if (tm) {
-                char buf[16];
-                std::snprintf(buf, sizeof(buf), "%02d", tm->tm_mday);
-                return buf;
-            }
-            return "";
-
         case MagicWord::CurrentTime:
-            if (tm) {
-                char buf[32];
-                std::snprintf(buf, sizeof(buf), "%02d:%02d", tm->tm_hour, tm->tm_min);
-                return buf;
-            }
-            return "";
-
-        case MagicWord::CurrentTimestamp:
-            if (tm) {
-                char buf[32];
-                std::snprintf(buf, sizeof(buf), "%04d%02d%02d%02d%02d%02d", 1900 + tm->tm_year, tm->tm_mon + 1,
-                              tm->tm_mday, tm->tm_hour, tm->tm_min, tm->tm_sec);
-                return buf;
-            }
-            return "";
-
-        case MagicWord::NumberOfPages:
-            return "0";
-
-        case MagicWord::NumberOfArticles:
-            return "0";
-
-        case MagicWord::NumberOfFiles:
-            return "0";
-
-        case MagicWord::SiteName:
-            return "Wikipedia";
-
-        case MagicWord::Server:
-            return "//en.wikipedia.org";
-
-        case MagicWord::ServerName:
-            return "en.wikipedia.org";
-
-        case MagicWord::ContentLanguage:
-            return "en";
-
-        case MagicWord::Unknown:
+        case MagicWord::CurrentTimestamp: {
+            const auto now = std::time(nullptr);
+            std::tm tm{};
+            if (!::gmtime_r(&now, &tm))
+                return "";
+            const char *format = "%Y";
+            if (word == MagicWord::CurrentMonth)
+                format = "%m";
+            if (word == MagicWord::CurrentDay)
+                format = "%d";
+            if (word == MagicWord::CurrentTime)
+                format = "%H:%M";
+            if (word == MagicWord::CurrentTimestamp)
+                format = "%Y%m%d%H%M%S";
+            char result[32];
+            return std::strftime(result, sizeof(result), format, &tm) ? std::string(result) : std::string{};
+        }
         default:
             return "";
     }

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.20)
 
 project(wikilib
     VERSION 0.1.0
@@ -42,6 +42,7 @@ add_library(wikilib::wikilib ALIAS wikilib)
 
 target_sources(wikilib PRIVATE
     # Core
+    src/core/types.cpp
     src/core/text_utils.cpp
     src/core/unicode_utils.cpp
     src/core/string_pool.cpp
@@ -84,7 +85,7 @@ target_include_directories(wikilib
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-target_compile_features(wikilib PUBLIC cxx_std_20)
+target_compile_features(wikilib PUBLIC cxx_std_23)
 
 # Compiler warnings
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -96,7 +97,7 @@ endif()
 # Link dependencies
 target_link_libraries(wikilib
     PUBLIC
-        ${BZIP2_LIBRARIES}
+        BZip2::BZip2
     PRIVATE
         pugixml::pugixml
         ICU::uc
@@ -136,6 +137,8 @@ install(TARGETS wikilib
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
+
+install(FILES include/wikilib.hpp DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
 install(DIRECTORY include/wikilib
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}

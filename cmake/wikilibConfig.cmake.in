@@ -4,6 +4,8 @@ include(CMakeFindDependencyMacro)
 
 find_dependency(BZip2)
 find_dependency(pugixml)
+find_dependency(ICU COMPONENTS uc i18n)
+find_dependency(nlohmann_json)
 
 include("${CMAKE_CURRENT_LIST_DIR}/wikilibTargets.cmake")
 

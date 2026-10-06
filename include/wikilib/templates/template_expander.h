@@ -90,12 +90,13 @@ struct ExpansionContext {
  * @brief Configuration for template expansion
  */
 struct ExpanderConfig {
-    int max_depth = 40; // Maximum template recursion
-    int max_expansions = 10000; // Maximum total expansions
+    int max_depth = 40; // Maximum recursive body/argument/default expansion levels
+    int max_expansions = 10000; // Per operation: templates/functions/parameters/magic words
     bool expand_parser_functions = true; // Evaluate #if, #switch, etc.
-    bool evaluate_lua = false; // Execute Lua modules (requires Lua)
+    bool evaluate_lua = false; // Reserved; Lua is not implemented
     bool fail_on_missing = false; // Error on missing templates
     bool preserve_unknown = true; // Keep unexpanded if can't expand
+    size_t max_output_bytes = 16 * 1024 * 1024; // Limit each expanded string
 };
 
 // ============================================================================
@@ -110,12 +111,18 @@ public:
     explicit TemplateExpander(std::shared_ptr<TemplateProvider> provider, ExpanderConfig config = {});
 
     /**
-     * @brief Expand all templates in wikitext
+     * @brief Expand the documented subset of templates in wikitext
+     * Limits and errors return an unexpected ParseError. Stats are cumulative;
+     * budgets and raw-definition cache reset for each public operation.
+     * See docs/TEMPLATE_EXPANSION.md for supported behavior and limitations.
      */
     [[nodiscard]] Result<std::string> expand(std::string_view input, const PageInfo &page = {});
 
     /**
-     * @brief Expand templates in AST
+     * @brief Expand serialized AST wikitext and reparse it transactionally
+     * Generated markup becomes AST nodes. Source locations refer to regenerated
+     * wikitext; existing child pointers are invalidated on success. Parent,
+     * category, and redirect pointers are rebuilt. Errors leave doc unchanged.
      */
     [[nodiscard]] Result<void> expand_ast(markup::DocumentNode &doc, const PageInfo &page = {});
 
@@ -133,7 +140,7 @@ public:
                                                                const ExpansionContext &context);
 
     /**
-     * @brief Get expansion statistics
+     * @brief Get cumulative expansion statistics (cache hits mean definition reuse)
      */
     struct Stats {
         int templates_expanded = 0;
@@ -158,14 +165,21 @@ private:
     ExpanderConfig config_;
     Stats stats_;
 
-    // Expansion cache
+    bool operation_active_ = false;
+    int operation_expansions_ = 0;
+
+    // Raw definitions cached only within a public operation; results always
+    // evaluate the current page/parameters and consume the expansion budget.
     std::unordered_map<std::string, std::string> cache_;
 
+    Result<std::string> run_operation(const std::function<std::string()> &action);
+    void consume_expansion(const ExpansionContext &context);
+    void append(std::string &output, std::string_view text) const;
+    std::string expand_one(const TemplateInvocation &invocation, const ExpansionContext &context);
+    std::string evaluate_function(ParserFunction func, const std::vector<std::string> &args,
+                                  const ExpansionContext &context);
     std::string expand_recursive(std::string_view input, ExpansionContext &context);
 
-    std::string evaluate_if(const std::vector<std::string> &args);
-    std::string evaluate_ifeq(const std::vector<std::string> &args);
-    std::string evaluate_switch(const std::vector<std::string> &args);
     std::string evaluate_expr(const std::vector<std::string> &args);
     std::string evaluate_time(const std::vector<std::string> &args, const ExpansionContext &ctx);
 };
@@ -224,7 +238,9 @@ enum class MagicWord {
 [[nodiscard]] MagicWord get_magic_word(std::string_view name) noexcept;
 
 /**
- * @brief Evaluate magic word
+ * @brief Evaluate a supported page/UTC-date magic word
+ * Unsupported enum values return an empty string; TemplateExpander preserves
+ * their invocation according to preserve_unknown instead.
  */
 [[nodiscard]] std::string evaluate_magic_word(MagicWord word, const ExpansionContext &context);
 

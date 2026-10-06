@@ -109,7 +109,7 @@ struct TemplateInvocation {
 [[nodiscard]] Result<TemplateInvocation> parse_invocation(std::string_view input);
 
 /**
- * @brief Find all template invocations in text
+ * @brief Find outermost invocations outside comments, nowiki, and parameters
  */
 [[nodiscard]] std::vector<TemplateInvocation> find_invocations(std::string_view input);
 

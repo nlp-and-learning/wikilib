@@ -15,6 +15,8 @@
 
 #include "wikilib/markup/ast.h"
 #include "wikilib/markup/parser.h"
+#include "wikilib/markup/heading.h"
+#include "wikilib/markup/section_tree.h"
 #include "wikilib/markup/tokenizer.h"
 #include "wikilib/markup/wikitext_visitor.h"
 
@@ -24,6 +26,7 @@
 #include "wikilib/dump/bz2_stream.h"
 #include "wikilib/dump/bz2_range_reader.h"
 #include "wikilib/dump/dump_reader.h"
+#include "wikilib/dump/index_parser.h"
 #include "wikilib/dump/page_handler.h"
 #include "wikilib/dump/xml_reader.h"
 

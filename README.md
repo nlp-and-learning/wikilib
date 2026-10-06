@@ -1,19 +1,71 @@
 # wikilib
-C++ library for parsing MediaWiki markup (Wikipedia, Wiktionary, etc.)
-                                                                                                                                                                
-Components:                                                                                                                                                     
-- markup: Tokenizer, parser, and AST for wikitext syntax                                                                                                        
-- dump: XML reader with bzip2 decompression for Wikipedia dumps                                                                                                 
-- output: JSON and plain text serialization                                                                                                                     
-- templates: Basic template parsing and expansion                                                                                                               
-                                                                                                                                                                  
-Features:                                                                                                                                                       
-- Full wikitext tokenization (links, templates, formatting, tables, lists)                                                                                      
-- AST with visitor pattern for traversal and transformation                                                                                                     
-- Streaming XML dump processing with page handlers                                                                                                              
-- Index file support for random access to compressed dumps                                                                                                      
-- JSON/JSONL output formats                                                                                                                                     
-- Plain text extraction with configurable options    
+
+A C++23 library for reading Wikimedia dumps and parsing a subset of MediaWiki
+wikitext. It is a library for data processing, with partial MediaWiki behavior.
+
+- Wikitext tokenizer and AST for formatting, links, templates, headings, lists,
+  tables, and HTML tags; visitors and a separate builder for heading section trees.
+- Sequential XML/page reading and incremental BZ2 multistream decompression.
+- TXT/TXT.BZ2 index reading, indexed streaming, and single/batch page extraction.
+- Template expansion with parameters/defaults, selected parser functions,
+  page context, numeric expressions, and explicit limits.
+- JSON/JSONL serialization, plain-text output, and ICU Unicode utilities.
+
+The wikitext and XML parsers support the library's documented subset rather than
+complete MediaWiki rendering or general XML validation. See
+[template expansion support](docs/TEMPLATE_EXPANSION.md) for exact behavior,
+limits, AST replacement semantics, and unsupported features. Lua and `#invoke`
+remain a separate follow-up.
+
+## Build and install
+
+Requires a C++23 compiler, CMake 3.20 or newer, BZip2, pugixml, ICU (`uc`, `i18n`),
+and nlohmann_json installed with CMake package metadata. GoogleTest is needed
+only when tests are enabled. Dependencies are currently found locally with
+`find_package()`. The CMake minimum matches the version that introduced
+[C++23 mode and export support](https://cmake.org/cmake/help/v3.20/release/3.20.html).
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j4
+ctest --test-dir build --output-on-failure
+cmake --install build --prefix /path/to/install
+```
+
+Tests and examples default to enabled; use `-DWIKILIB_BUILD_TESTS=OFF` and
+`-DWIKILIB_BUILD_EXAMPLES=OFF` for a library-only build. Optional local benchmarks
+use `-DWIKILIB_BUILD_BENCHMARKS=ON`. Include `<wikilib.hpp>` or individual headers.
+
+An external CMake project can consume the installed package:
+
+```cmake
+find_package(wikilib CONFIG REQUIRED)
+target_link_libraries(my_program PRIVATE wikilib::wikilib)
+```
+
+Configure the consumer with `-DCMAKE_PREFIX_PATH=/path/to/install`. The exported
+target supplies C++23 and dependency requirements. `InstalledPackageConsumer`
+tests installation, compiling and running a separate project against installed
+headers and library.
+
+## Template expansion
+
+```cpp
+#include <wikilib.hpp>
+
+using namespace wikilib;
+auto provider = std::make_shared<templates::MemoryTemplateProvider>();
+provider->add_template("Greeting", "Hello {{{1|world}}}, {{PAGENAME}}!");
+templates::TemplateExpander expander(provider);
+PageInfo page;
+page.title = "Example";
+auto result = expander.expand("{{Greeting|reader}} {{#expr:2+3*4}}", page);
+// On success: "Hello reader, Example! 14". Inspect result.error() on failure.
+```
+
+`expand_ast(document, page)` reparses expanded wikitext into an AST and replaces
+its children on success. Expansion and reported parse failures leave the
+original document unchanged. Parsing alone does not expand templates.
 
 ## Indexed streaming
 

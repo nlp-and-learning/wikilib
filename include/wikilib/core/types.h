@@ -113,7 +113,7 @@ struct Namespace {
  */
 struct PageInfo {
     PageId id = 0;
-    std::string title;
+    std::string title; // Full dump title, including a localized namespace prefix
     NamespaceId namespace_id = 0;
     RevisionId revision_id = 0;
     std::string timestamp;
