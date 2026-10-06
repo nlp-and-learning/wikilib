@@ -14,6 +14,8 @@
 
 namespace wikilib::dump {
 
+enum class IndexLinePolicy { SkipMalformed, RejectMalformed };
+
 // ============================================================================
 // Index chunk
 // ============================================================================
@@ -25,9 +27,9 @@ namespace wikilib::dump {
  * the same offset. A chunk groups all entries with the same starting offset.
  */
 struct IndexChunk {
-    uint64_t start_offset = 0;  // Start offset in compressed dump
-    uint64_t end_offset = 0;    // End offset (start of next chunk or EOF)
-    std::vector<IndexEntry> entries;  // All entries in this chunk
+    uint64_t start_offset = 0; // Start offset in compressed dump
+    uint64_t end_offset = 0; // End offset (start of next chunk or EOF)
+    std::vector<IndexEntry> entries; // All entries in this chunk
 
     /**
      * @brief Clear chunk data
@@ -79,29 +81,33 @@ public:
     /**
      * @brief Create chunker from line reader
      * @param reader Line reader for index file (takes ownership)
-     * @param eof_offset Offset of end of dump file
+     * @param eof_offset Offset of end of dump file; 0 disables the size check
+     * @param policy Whether to skip or reject malformed nonempty lines
      */
-    explicit IndexChunker(std::unique_ptr<core::LineReader> reader, uint64_t eof_offset);
+    explicit IndexChunker(std::unique_ptr<core::LineReader> reader, uint64_t eof_offset,
+                          IndexLinePolicy policy = IndexLinePolicy::SkipMalformed);
 
     /**
      * @brief Create chunker from BZ2 index file
      * @param index_path Path to index file (.txt or .txt.bz2)
-     * @param eof_offset Offset of end of dump file
+     * @param eof_offset Offset of end of dump file; 0 disables the size check
+     * @param policy Whether to skip or reject malformed nonempty lines
      */
-    static IndexChunker from_file(const std::string& index_path, uint64_t eof_offset);
+    static IndexChunker from_file(const std::string &index_path, uint64_t eof_offset,
+                                  IndexLinePolicy policy = IndexLinePolicy::SkipMalformed);
 
     ~IndexChunker();
 
     // Movable only
-    IndexChunker(IndexChunker&&) noexcept;
-    IndexChunker& operator=(IndexChunker&&) noexcept;
+    IndexChunker(IndexChunker &&) noexcept;
+    IndexChunker &operator=(IndexChunker &&) noexcept;
 
     /**
      * @brief Get next chunk of entries
      * @param chunk Output chunk to fill
-     * @return true if chunk was read, false if EOF
+     * @return true if chunk was read, false on EOF or error; inspect error()
      */
-    bool next_chunk(IndexChunk& chunk);
+    bool next_chunk(IndexChunk &chunk);
 
     /**
      * @brief Check if at end of stream
@@ -113,6 +119,9 @@ public:
      */
     [[nodiscard]] size_t chunks_processed() const noexcept;
 
+    [[nodiscard]] std::string_view error() const noexcept;
+    /** @brief Malformed nonempty lines skipped under SkipMalformed. */
+    [[nodiscard]] size_t skipped_lines() const noexcept;
 private:
     IndexChunker() = default;
 
@@ -128,25 +137,22 @@ private:
  * @brief Load all chunks from index file
  * @param index_path Path to index file
  * @param eof_offset End offset of dump file
+ * @throws std::runtime_error On input or offset validation failure
  * @return Vector of all chunks
  */
-[[nodiscard]] std::vector<IndexChunk> load_index_chunks(
-    const std::string& index_path,
-    uint64_t eof_offset
-);
+[[nodiscard]] std::vector<IndexChunk> load_index_chunks(const std::string &index_path, uint64_t eof_offset);
 
 /**
  * @brief Count total entries in index file
+ * @throws std::runtime_error On input or offset ordering failure
  */
-[[nodiscard]] size_t count_index_entries(const std::string& index_path);
+[[nodiscard]] size_t count_index_entries(const std::string &index_path);
 
 /**
  * @brief Get chunk containing a specific page title
+ * @throws std::runtime_error On a failure encountered before finding the title
  */
-[[nodiscard]] std::optional<IndexChunk> find_chunk_by_title(
-    const std::string& index_path,
-    uint64_t eof_offset,
-    std::string_view title
-);
+[[nodiscard]] std::optional<IndexChunk> find_chunk_by_title(const std::string &index_path, uint64_t eof_offset,
+                                                            std::string_view title);
 
 } // namespace wikilib::dump

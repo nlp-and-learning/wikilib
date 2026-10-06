@@ -19,6 +19,8 @@ add_executable(wikilib_tests
     dump/test_bz2_stream.cpp
     dump/test_xml_reader.cpp
     dump/test_page_handler.cpp
+    dump/test_index_io.cpp
+    dump/test_dump_reader.cpp
     dump/test_dump_path.cpp
     templates/test_template_parser.cpp
     templates/test_complex_templates.cpp

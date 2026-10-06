@@ -50,11 +50,14 @@ class IndexParser {
 public:
     /**
      * @brief Parse index from file
+     * @note Supports TXT and TXT.BZ2. Rejects malformed nonempty lines and
+     * decreasing offsets; inspect is_valid() and error().
      */
     explicit IndexParser(const std::string &path);
 
     /**
      * @brief Parse index from string content
+     * @note Uses the same validation as the file constructor.
      */
     static IndexParser from_string(std::string_view content);
 

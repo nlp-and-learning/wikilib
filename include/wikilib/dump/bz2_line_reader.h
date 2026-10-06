@@ -38,7 +38,7 @@ public:
     /**
      * @brief Get last error message
      */
-    [[nodiscard]] std::string_view error() const noexcept;
+    [[nodiscard]] std::string_view error() const noexcept override;
 
 protected:
     void fill_buffer() override;

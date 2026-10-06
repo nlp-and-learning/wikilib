@@ -8,6 +8,7 @@
 #include <charconv>
 #include <fstream>
 #include <sstream>
+#include "wikilib/dump/index_chunker.h"
 
 namespace wikilib::dump {
 
@@ -23,6 +24,7 @@ struct IndexParser::Impl {
     bool valid = false;
 
     void build_indices();
+    void read_chunks(IndexChunker &chunker);
 };
 
 void IndexParser::Impl::build_indices() {
@@ -41,72 +43,35 @@ void IndexParser::Impl::build_indices() {
 IndexParser::IndexParser() : impl_(std::make_unique<Impl>()) {
 }
 
+void IndexParser::Impl::read_chunks(IndexChunker &chunker) {
+    IndexChunk chunk;
+    while (chunker.next_chunk(chunk)) {
+        for (auto &entry: chunk.entries)
+            entries.push_back(std::move(entry));
+    }
+    if (!chunker.error().empty()) {
+        error_message = chunker.error();
+        entries.clear();
+        return;
+    }
+    if (entries.empty()) {
+        error_message = "No valid entries found in index file";
+        return;
+    }
+    build_indices();
+    valid = true;
+}
+
 IndexParser::IndexParser(const std::string &path) : impl_(std::make_unique<Impl>()) {
-    std::ifstream file(path);
-    if (!file) {
-        impl_->error_message = "Failed to open index file: " + path;
-        return;
-    }
-
-    std::string line;
-    size_t line_num = 0;
-
-    while (std::getline(file, line)) {
-        ++line_num;
-
-        if (line.empty()) {
-            continue;
-        }
-
-        auto entry = parse_index_line(line);
-        if (entry) {
-            impl_->entries.push_back(std::move(*entry));
-        } else {
-            // Skip malformed lines but continue parsing
-        }
-    }
-
-    if (impl_->entries.empty()) {
-        impl_->error_message = "No valid entries found in index file";
-        return;
-    }
-
-    impl_->build_indices();
-    impl_->valid = true;
+    auto chunker = IndexChunker::from_file(path, 0, IndexLinePolicy::RejectMalformed);
+    impl_->read_chunks(chunker);
 }
 
 IndexParser IndexParser::from_string(std::string_view content) {
     IndexParser parser;
-
-    size_t pos = 0;
-    while (pos < content.size()) {
-        size_t end = content.find('\n', pos);
-        if (end == std::string_view::npos) {
-            end = content.size();
-        }
-
-        std::string_view line = content.substr(pos, end - pos);
-
-        // Remove \r if present
-        if (!line.empty() && line.back() == '\r') {
-            line.remove_suffix(1);
-        }
-
-        if (!line.empty()) {
-            auto entry = parse_index_line(line);
-            if (entry) {
-                parser.impl_->entries.push_back(std::move(*entry));
-            }
-        }
-
-        pos = end + 1;
-    }
-
-    if (!parser.impl_->entries.empty()) {
-        parser.impl_->build_indices();
-        parser.impl_->valid = true;
-    }
-
+    std::istringstream stream{std::string(content)};
+    IndexChunker chunker(std::make_unique<core::StreamLineReader>(stream), 0, IndexLinePolicy::RejectMalformed);
+    parser.impl_->read_chunks(chunker);
     return parser;
 }
 
@@ -221,7 +186,7 @@ void IndexParser::for_each(EntryCallback callback) const {
 }
 
 std::string_view IndexParser::error() const noexcept {
-    return impl_ ? impl_->error_message : "";
+    return impl_ ? std::string_view(impl_->error_message) : std::string_view{};
 }
 
 // ============================================================================
@@ -232,6 +197,8 @@ std::optional<IndexEntry> parse_index_line(std::string_view line) {
     // Format: offset:page_id:title
     // Example: 659:178:tęsknota
 
+    if (!line.empty() && line.back() == '\r')
+        line.remove_suffix(1);
     // Find first colon (after offset)
     size_t first_colon = line.find(':');
     if (first_colon == std::string_view::npos || first_colon == 0) {
@@ -249,19 +216,21 @@ std::optional<IndexEntry> parse_index_line(std::string_view line) {
     // Parse offset
     std::string_view offset_str = line.substr(0, first_colon);
     auto offset_result = std::from_chars(offset_str.data(), offset_str.data() + offset_str.size(), entry.offset);
-    if (offset_result.ec != std::errc{}) {
+    if (offset_result.ec != std::errc{} || offset_result.ptr != offset_str.data() + offset_str.size()) {
         return std::nullopt;
     }
 
     // Parse page_id
     std::string_view id_str = line.substr(first_colon + 1, second_colon - first_colon - 1);
     auto id_result = std::from_chars(id_str.data(), id_str.data() + id_str.size(), entry.page_id);
-    if (id_result.ec != std::errc{}) {
+    if (id_result.ec != std::errc{} || id_result.ptr != id_str.data() + id_str.size()) {
         return std::nullopt;
     }
 
     // Rest is the title (may contain colons)
     entry.title = std::string(line.substr(second_colon + 1));
+    if (entry.title.empty())
+        return std::nullopt;
 
     return entry;
 }

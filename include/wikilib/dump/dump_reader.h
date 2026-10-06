@@ -37,14 +37,14 @@ struct ExtractedPage {
     std::string title;
     std::string content;
     PageId id = 0;
-    bool found = false;
+    bool found = false; // True for an existing page even if content is empty
 };
 
 /**
  * @brief Efficient reader for Wikimedia dump files
  *
  * Uses index file to enable random access to compressed dump.
- * Supports streaming decompression with adaptive buffer sizing.
+ * Indexed extraction buffers a complete compressed chunk and its XML.
  *
  * Example usage:
  * @code
@@ -84,6 +84,10 @@ public:
      *
      * Reads the entire index file and builds lookup tables.
      * Progress callback is called periodically.
+     * Uses the compressed index, or its TXT counterpart if BZ2 is absent.
+     * Rejects malformed lines, invalid offsets, and duplicate titles. Each call
+     * replaces the previous index; failure leaves an unloaded, empty state.
+     * Inspect error() after loading.
      *
      * @param progress_callback Optional callback for progress (chunks processed)
      */
@@ -123,6 +127,8 @@ public:
      * @brief Extract multiple pages efficiently
      *
      * Groups pages by chunk for efficient extraction.
+     * Preserves input order and duplicates. Inspect error() for extraction
+     * failures; a title absent from the index is a normal not-found result.
      */
     [[nodiscard]] std::vector<ExtractedPage> extract_pages(const std::vector<std::string>& titles);
 

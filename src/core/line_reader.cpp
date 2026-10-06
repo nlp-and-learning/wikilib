@@ -204,6 +204,9 @@ bool StreamLineReader::read_line(std::string& line) {
     }
 
     // Failed to read - we're at EOF
+    if (stream_.bad() || (stream_.fail() && !stream_.eof())) {
+        error_message_ = "Line reader I/O error";
+    }
     eof_ = true;
     return false;
 }

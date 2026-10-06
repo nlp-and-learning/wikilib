@@ -28,12 +28,17 @@ public:
      * @param line Output string to store the line
      * @return true if line was read, false if EOF or error
      */
-    virtual bool read_line(std::string& line) = 0;
+    virtual bool read_line(std::string &line) = 0;
 
     /**
      * @brief Check if at end of stream
      */
     [[nodiscard]] virtual bool eof() const noexcept = 0;
+
+    /** @brief Read failure, or an empty view on clean EOF. */
+    [[nodiscard]] virtual std::string_view error() const noexcept {
+        return {};
+    }
 };
 
 // ============================================================================
@@ -60,21 +65,20 @@ public:
     ~BufferedLineReader() override;
 
     // Non-copyable, movable
-    BufferedLineReader(const BufferedLineReader&) = delete;
-    BufferedLineReader& operator=(const BufferedLineReader&) = delete;
-    BufferedLineReader(BufferedLineReader&&) noexcept;
-    BufferedLineReader& operator=(BufferedLineReader&&) noexcept;
+    BufferedLineReader(const BufferedLineReader &) = delete;
+    BufferedLineReader &operator=(const BufferedLineReader &) = delete;
+    BufferedLineReader(BufferedLineReader &&) noexcept;
+    BufferedLineReader &operator=(BufferedLineReader &&) noexcept;
 
     /**
      * @brief Read next line from source
      */
-    bool read_line(std::string& line) override;
+    bool read_line(std::string &line) override;
 
     /**
      * @brief Check if at end of stream
      */
     [[nodiscard]] bool eof() const noexcept override;
-
 protected:
     /**
      * @brief Read next buffer from source
@@ -85,17 +89,16 @@ protected:
     virtual void fill_buffer() = 0;
 
     // Buffer state
-    char* buffer_ = nullptr;
+    char *buffer_ = nullptr;
     size_t buffer_size_;
-    size_t bytes_read_ = 0;     // Bytes read in last fill_buffer()
-    bool eof_ = false;          // At end of stream
-    bool initialized_ = false;  // First buffer loaded
+    size_t bytes_read_ = 0; // Bytes read in last fill_buffer()
+    bool eof_ = false; // At end of stream
+    bool initialized_ = false; // First buffer loaded
 
     // Line parsing state
-    size_t line_start_ = 0;     // Start of current line in buffer
-    size_t eol_pos_ = 0;        // End of line position
-    std::string result_;        // Accumulated line data for long lines
-
+    size_t line_start_ = 0; // Start of current line in buffer
+    size_t eol_pos_ = 0; // End of line position
+    std::string result_; // Accumulated line data for long lines
 private:
     bool find_eol_in_buffer();
     void find_next_eol();
@@ -116,14 +119,18 @@ private:
  */
 class StreamLineReader : public LineReader {
 public:
-    explicit StreamLineReader(std::istream& stream);
+    explicit StreamLineReader(std::istream &stream);
 
-    bool read_line(std::string& line) override;
+    bool read_line(std::string &line) override;
     [[nodiscard]] bool eof() const noexcept override;
 
+    [[nodiscard]] std::string_view error() const noexcept override {
+        return error_message_;
+    }
 private:
-    std::istream& stream_;
+    std::istream &stream_;
     bool eof_ = false;
+    std::string error_message_;
 };
 
 } // namespace wikilib::core

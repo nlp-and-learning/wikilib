@@ -50,21 +50,32 @@ skipped tests. All 23 new tests pass ASan, UBSan, and LSan checks.
 
 ## 3. Stabilize index reading and page extraction
 
-- [ ] Fix ownership of the `ifstream` used by `IndexChunker::from_file()` for
+- [x] Fix ownership of the `ifstream` used by `IndexChunker::from_file()` for
   uncompressed index files.
-- [ ] Validate offset ordering and ranges against the dump size.
-- [ ] Replace recursive skipping of malformed index lines with a loop, and make
+- [x] Validate offset ordering and ranges against the dump size.
+- [x] Replace recursive skipping of malformed index lines with a loop, and make
   the malformed-line policy explicit.
-- [ ] Make repeated `DumpReader::load_index()` calls safe and leave a clear state
+- [x] Make repeated `DumpReader::load_index()` calls safe and leave a clear state
   after loading fails.
-- [ ] Distinguish a missing page from an existing page with empty content.
-- [ ] Return correct results for duplicate titles in `extract_pages()`.
-- [ ] Add tests for TXT and TXT.BZ2 indexes, invalid ranges, missing files,
+- [x] Distinguish a missing page from an existing page with empty content.
+- [x] Return correct results for duplicate titles in `extract_pages()`.
+- [x] Add tests for TXT and TXT.BZ2 indexes, invalid ranges, missing files,
   repeated loading, empty pages, and duplicate requests.
 
 **Acceptance criteria:** Plain and compressed indexes behave consistently. An
 invalid index is not reported as successfully loaded, and extraction results
 preserve the requested order and duplicates.
+
+**Completed:** Added 28 index and extraction tests. `IndexChunker` now owns its
+plain-file stream, exposes read failures and skipped-line counts, and supports
+explicit permissive or strict malformed-line handling. `IndexParser` and
+`DumpReader::load_index()` use strict validation; failed reloads leave an empty,
+unloaded state. DumpReader supports a plain TXT index when the BZ2 counterpart
+is absent. Extraction handles empty pages, duplicate requests, and the partial
+mediawiki root in the first or last indexed XML chunk. Invalid compressed ranges
+are rejected before allocation. The library and examples build; the full suite
+has 433 passing tests and 8 skipped tests. All 28 new tests pass ASan, UBSan,
+and LSan checks.
 
 ## 4. Add streaming decompression of indexed chunks
 
