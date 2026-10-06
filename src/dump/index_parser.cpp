@@ -228,7 +228,29 @@ std::optional<IndexEntry> parse_index_line(std::string_view line) {
     }
 
     // Rest is the title (may contain colons)
-    entry.title = std::string(line.substr(second_colon + 1));
+    // Wikimedia multistream indexes retain XML escaping in titles. Decode
+    // predefined entities once, so lookup names agree with decoded XML titles.
+    const auto title = line.substr(second_colon + 1);
+    entry.title.reserve(title.size());
+    for (size_t i = 0; i < title.size();) {
+        bool decoded = false;
+        if (title[i] == '&') {
+            for (const auto &[entity, value]: {std::pair{std::string_view("&amp;"), '&'},
+                                               {"&quot;", '"'},
+                                               {"&apos;", '\''},
+                                               {"&lt;", '<'},
+                                               {"&gt;", '>'}}) {
+                if (title.substr(i).starts_with(entity)) {
+                    entry.title += value;
+                    i += entity.size();
+                    decoded = true;
+                    break;
+                }
+            }
+        }
+        if (!decoded)
+            entry.title += title[i++];
+    }
     if (entry.title.empty())
         return std::nullopt;
 

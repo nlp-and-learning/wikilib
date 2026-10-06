@@ -136,6 +136,7 @@ private:
 
 /**
  * @brief Parse single index line
+ * @details Decodes predefined XML entities in Wikimedia titles exactly once.
  */
 [[nodiscard]] std::optional<IndexEntry> parse_index_line(std::string_view line);
 

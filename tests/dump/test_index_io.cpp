@@ -8,6 +8,19 @@ using namespace wikilib::test;
 
 namespace {
 
+TEST(IndexIoTest, DecodesWikimediaTitleEscapingExactlyOnce) {
+    const auto entry =
+            parse_index_line("10:2536003:School &quot;Milenium&quot; &amp; &apos;x&apos; &lt;y&gt; &amp;quot;");
+    ASSERT_TRUE(entry);
+    EXPECT_EQ(entry->title, "School \"Milenium\" & 'x' <y> &quot;");
+    TempDirectory dir;
+    const auto path = dir.path / "index.txt.bz2";
+    write_file(path, bz2("10:1:A &amp; B\n"));
+    const auto chunk = find_chunk_by_title(path.string(), 20, "A & B");
+    ASSERT_TRUE(chunk);
+    EXPECT_EQ(chunk->entries.front().title, "A & B");
+}
+
 TEST(IndexIoTest, ReadsPlainAndCompressedFilesIncludingCrLfAndColons) {
     TempDirectory dir;
     const std::string content = "\n0:1:A\r\n0:2:Title:With:Colons\r\n10:3:B";

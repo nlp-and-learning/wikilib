@@ -58,6 +58,30 @@ TEST_F(IndexedStreamingTest, ReadsFirstMiddleAndLastChunksWithoutLoadingIndex) {
     EXPECT_EQ(reader.page_count(), 0u);
 }
 
+TEST_F(IndexedStreamingTest, EscapedIndexTitlesMatchXmlAndExtractionLookup) {
+    const auto data =
+            bz2("<mediawiki>" +
+                xml_page("School &quot;Milenium&quot; &amp; Co", 2536003, "<revision><text>content</text></revision>") +
+                "</mediawiki>");
+    write_file(path.dump_path(), data);
+    write_file(path.index_path(), bz2("0:2536003:School &quot;Milenium&quot; &amp; Co\n"));
+    const auto indexed = load_index_chunks(path.index_path().string(), data.size());
+    ASSERT_EQ(indexed.size(), 1u);
+    DumpReader reader(path);
+    size_t seen = 0;
+    ASSERT_TRUE(reader.process_chunk(indexed.front(), [&](const Page &page) {
+        EXPECT_EQ(page.info.title, "School \"Milenium\" & Co");
+        ++seen;
+        return true;
+    })) << reader.error();
+    EXPECT_EQ(seen, 1u);
+    reader.load_index();
+    ASSERT_TRUE(reader.error().empty()) << reader.error();
+    const auto page = reader.extract_page("School \"Milenium\" & Co");
+    ASSERT_TRUE(page.found) << reader.error();
+    EXPECT_EQ(page.content, "content");
+}
+
 TEST_F(IndexedStreamingTest, ProcessesWholeIndexWithProgress) {
     DumpReader reader(path);
     std::vector<std::string> titles;

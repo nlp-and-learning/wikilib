@@ -4,7 +4,8 @@ These measurements cover stage 5's shared streaming parser and batch extraction.
 The fixtures are deterministic, synthetic Wikimedia-shaped multistream dumps,
 with 4 KiB of wikitext per page and a plain index. They contain headings, links,
 and templates; they do not represent all languages, revision histories, or
-compression ratios in real Wikimedia dumps. No real dump was available locally.
+compression ratios in real Wikimedia dumps. See the subsequent
+[bounded Polish Wikipedia benchmark](PLWIKI-20260101.md) for real-file results.
 
 ## Reproduce
 
@@ -81,4 +82,4 @@ fold, while buffered processing grew from about 57 to 423 MiB. Streaming still
 retains the current chunk's index entries, so RSS can grow with their count and
 with individual page sizes. Buffered parsing was slightly faster here; the
 streaming benefit is bounded XML memory and consistent page handling. Real-dump
-measurements remain a follow-up before making general throughput claims.
+measurements are recorded separately; neither sample establishes universal throughput.

@@ -138,7 +138,12 @@ bool DumpReader::Impl::process_range(const IndexChunk &chunk, const PageCallback
         if (!chunk.entries.empty() &&
             (pages_in_chunk >= chunk.entries.size() || page->info.title != chunk.entries[pages_in_chunk].title ||
              page->info.id != chunk.entries[pages_in_chunk].page_id)) {
-            error_message = "XML page does not match index entry";
+            error_message = "XML page does not match index entry at chunk " + std::to_string(chunk.start_offset) +
+                            ", position " + std::to_string(pages_in_chunk) +
+                            ": XML id=" + std::to_string(page->info.id) + ", title=" + page->info.title;
+            if (pages_in_chunk < chunk.entries.size())
+                error_message += "; index id=" + std::to_string(chunk.entries[pages_in_chunk].page_id) +
+                                 ", title=" + chunk.entries[pages_in_chunk].title;
             return false;
         }
         ++pages_in_chunk;

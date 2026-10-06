@@ -216,8 +216,12 @@ supported Scribunto interface before implementation.
 - [ ] Define execution/resource limits and page-context-aware module state.
 - [ ] Add module integration tests and document unsupported Scribunto APIs.
 
-Real Wikimedia dump performance measurements remain a separate follow-up to the
-synthetic benchmark report from stage 5.
+Bounded real Wikimedia dump measurements are complete: see the
+[Polish Wikipedia report](benchmarks/PLWIKI-20260101.md). Three runs cover the
+full index and 30 selected XML chunks (2,943 pages), batch extraction,
+cancellation, markup parsing, and section trees. The measurements exposed and
+fixed XML-escaped index titles. Two real-page parser recovery diagnostics remain
+a fidelity follow-up; Lua integration and full-dump validation remain open.
 
 ## Milestones
 
