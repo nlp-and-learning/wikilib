@@ -23,6 +23,8 @@ namespace wikilib::dump {
  *
  * Efficiently reads large compressed dump files with minimal memory usage.
  * Supports multistream BZ2 files used by Wikipedia dumps.
+ * Empty files and trailing non-BZ2 data are reported as errors; a valid empty
+ * BZ2 stream is accepted. Read errors are exposed through error().
  */
 class Bz2Stream {
 public:
@@ -52,24 +54,29 @@ public:
     [[nodiscard]] bool is_open() const noexcept;
 
     /**
-     * @brief Check if at end of file
+     * @brief Check if reading has stopped and no buffered lines remain
+     * @note Inspect error() to distinguish clean EOF from a read failure.
      */
     [[nodiscard]] bool eof() const noexcept;
 
     /**
      * @brief Read up to n bytes
      * @return Number of bytes read
+     * @note A short read can indicate EOF or an error. Inspect error().
      */
     size_t read(char *buffer, size_t n);
 
     /**
      * @brief Read line (up to newline or EOF)
      * @return Line content (without newline) or nullopt at EOF
+     * @note Buffered lines remain available after the underlying stream ends.
+     * Inspect error() to distinguish clean EOF from a read failure.
      */
     [[nodiscard]] std::optional<std::string> read_line();
 
     /**
      * @brief Read all remaining content
+     * @note May return partial content on a read failure; inspect error().
      */
     [[nodiscard]] std::string read_all();
 

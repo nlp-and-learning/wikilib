@@ -6,10 +6,32 @@
 #include "wikilib/dump/bz2_stream.h"
 #include <algorithm>
 #include <bzlib.h>
+#include <climits>
 #include <cstring>
 #include <sys/stat.h>
 
 namespace wikilib::dump {
+
+namespace {
+
+std::string bz2_error_message(int code) {
+    switch (code) {
+        case BZ_UNEXPECTED_EOF:
+            return "BZ2 read error: unexpected EOF (truncated stream)";
+        case BZ_DATA_ERROR:
+            return "BZ2 read error: data error (corrupt stream)";
+        case BZ_DATA_ERROR_MAGIC:
+            return "BZ2 read error: not BZ2 data";
+        case BZ_IO_ERROR:
+            return "BZ2 read error: file I/O error";
+        case BZ_MEM_ERROR:
+            return "BZ2 read error: out of memory";
+        default:
+            return "BZ2 read error: code " + std::to_string(code);
+    }
+}
+
+} // namespace
 
 // ============================================================================
 // Bz2Stream implementation
@@ -39,21 +61,52 @@ struct Bz2Stream::Impl {
 };
 
 bool Bz2Stream::Impl::open_next_stream() {
+    // libbz2 may read ahead into the next stream. The unused input belongs to
+    // bz_file, so it must be copied before that handle is closed.
+    char unused[BZ_MAX_UNUSED];
+    int unused_count = 0;
     if (bz_file) {
-        BZ2_bzReadClose(&bz_error, bz_file);
-        bz_file = nullptr;
+        void *unused_data = nullptr;
+        int status = BZ_OK;
+        BZ2_bzReadGetUnused(&status, bz_file, &unused_data, &unused_count);
+        if (status != BZ_OK) {
+            error_message = bz2_error_message(status);
+            close_bz();
+            at_eof = true;
+            return false;
+        }
+        if (unused_count > 0) {
+            std::memcpy(unused, unused_data, static_cast<size_t>(unused_count));
+        }
+        close_bz();
+
+        // Only a successfully completed stream can be followed by clean EOF.
+        // Probe for more input when libbz2 has no unread bytes to hand over.
+        if (unused_count == 0 && file) {
+            int next = std::fgetc(file);
+            if (next == EOF) {
+                if (std::ferror(file)) {
+                    error_message = bz2_error_message(BZ_IO_ERROR);
+                }
+                at_eof = true;
+                return false;
+            }
+            unused[0] = static_cast<char>(next);
+            unused_count = 1;
+        }
     }
 
-    if (!file || feof(file)) {
+    if (!file) {
         at_eof = true;
         return false;
     }
 
     bz_error = BZ_OK;
-    bz_file = BZ2_bzReadOpen(&bz_error, file, 0, 0, nullptr, 0);
+    bz_file = BZ2_bzReadOpen(&bz_error, file, 0, 0,
+                           unused_count > 0 ? unused : nullptr, unused_count);
 
     if (bz_error != BZ_OK || !bz_file) {
-        error_message = "Failed to open BZ2 stream";
+        error_message = bz2_error_message(bz_error);
         at_eof = true;
         return false;
     }
@@ -117,7 +170,7 @@ bool Bz2Stream::is_open() const noexcept {
 }
 
 bool Bz2Stream::eof() const noexcept {
-    return !impl_ || impl_->at_eof;
+    return !impl_ || (impl_->at_eof && impl_->buffer_pos == impl_->buffer_len);
 }
 
 size_t Bz2Stream::read(char *buffer, size_t n) {
@@ -142,7 +195,7 @@ size_t Bz2Stream::read(char *buffer, size_t n) {
                 impl_->at_eof = true;
             }
         } else if (impl_->bz_error != BZ_OK) {
-            impl_->error_message = "BZ2 read error";
+            impl_->error_message = bz2_error_message(impl_->bz_error);
             impl_->at_eof = true;
             break;
         }
@@ -157,7 +210,7 @@ size_t Bz2Stream::read(char *buffer, size_t n) {
 }
 
 std::optional<std::string> Bz2Stream::read_line() {
-    if (!impl_ || impl_->at_eof) {
+    if (!impl_) {
         return std::nullopt;
     }
 
@@ -220,6 +273,9 @@ bool Bz2Stream::seek_to_stream(uint64_t offset) {
 
     // Close current BZ2 stream
     impl_->close_bz();
+    impl_->at_eof = true;
+    impl_->buffer_pos = 0;
+    impl_->buffer_len = 0;
 
     // Seek in file
     if (fseek(impl_->file, static_cast<long>(offset), SEEK_SET) != 0) {
@@ -227,17 +283,17 @@ bool Bz2Stream::seek_to_stream(uint64_t offset) {
         return false;
     }
 
+    std::clearerr(impl_->file);
     impl_->compressed_bytes = offset;
     impl_->at_eof = false;
-    impl_->buffer_pos = 0;
-    impl_->buffer_len = 0;
+    impl_->error_message.clear();
 
     // Open new BZ2 stream
     return impl_->open_next_stream();
 }
 
 std::string_view Bz2Stream::error() const noexcept {
-    return impl_ ? impl_->error_message : "";
+    return impl_ ? std::string_view(impl_->error_message) : std::string_view{};
 }
 
 void Bz2Stream::close() {
@@ -251,6 +307,8 @@ void Bz2Stream::close() {
     }
     impl_->file = nullptr;
     impl_->at_eof = true;
+    impl_->buffer_pos = 0;
+    impl_->buffer_len = 0;
 }
 
 // ============================================================================
