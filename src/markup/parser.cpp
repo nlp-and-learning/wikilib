@@ -5,7 +5,9 @@
 
 #include "wikilib/markup/parser.h"
 #include <algorithm>
+#include <array>
 #include <sstream>
+#include "wikilib/core/text_utils.hpp"
 #include "wikilib/core/types.h"
 #include "wikilib/markup/ast.h"
 #include "wikilib/markup/tokenizer.h"
@@ -258,6 +260,25 @@ NodePtr Parser::parse_node() {
         case TokenType::HtmlTagOpen:
             return parse_html_tag();
 
+        case TokenType::ExtensionTag: {
+            auto tag = std::make_unique<HtmlTagNode>();
+            tag->tag_name = text::to_lower_ascii_copy(tok.tag_name);
+            tag->self_closing = tok.self_closing;
+            tag->location = tok.location;
+            // Raw content between the opening '>' and the closing "</"
+            const std::string_view raw = tok.text;
+            const size_t open_end = raw.find('>');
+            const size_t close_begin = raw.rfind("</");
+            if (open_end != std::string_view::npos && close_begin != std::string_view::npos &&
+                close_begin > open_end) {
+                std::string_view content = raw.substr(open_end + 1, close_begin - open_end - 1);
+                if (!content.empty())
+                    tag->content.push_back(std::make_unique<TextNode>(std::string(content)));
+            }
+            advance();
+            return tag;
+        }
+
         case TokenType::HtmlComment: {
             auto node = std::make_unique<CommentNode>();
             // Extract content between <!-- and -->
@@ -475,21 +496,28 @@ NodePtr Parser::parse_heading() {
         return text;
     }
 
-    // Build content from tokens before closing
-    for (int i = 0; i < closing_idx; ++i) {
-        const Token& tok = line_tokens[i];
-        if (tok.type == TokenType::Heading) {
-            // Heading tokens inside become text (e.g., == in title)
-            auto text_node = std::make_unique<TextNode>(std::string(tok.text));
-            heading->content.push_back(std::move(text_node));
-        } else if (tok.type == TokenType::Text || tok.type == TokenType::Whitespace) {
-            auto text_node = std::make_unique<TextNode>(std::string(tok.text));
-            heading->content.push_back(std::move(text_node));
-        } else {
-            // For other token types, just add as text for now
-            auto text_node = std::make_unique<TextNode>(std::string(tok.text));
-            heading->content.push_back(std::move(text_node));
+    // Parse the title (source between opening and closing markers) as inline
+    // content, so links, formatting and <ref> inside headings become nodes
+    const size_t title_begin = line_tokens[0].location.begin.offset;
+    const size_t title_end = line_tokens[closing_idx].location.begin.offset;
+    if (title_end > title_begin) {
+        Parser title_parser(config_);
+        title_parser.tokenizer_ = std::make_unique<Tokenizer>(
+                tokenizer_->input().substr(title_begin, title_end - title_begin), config_.tokenizer);
+        title_parser.tokenizer_->start_mid_line();
+        title_parser.depth_ = depth_;
+        while (!title_parser.at_end()) {
+            const Token &tok = title_parser.current();
+            // Inner "==" and stray closing markers are part of the title text
+            NodePtr node = tok.type == TokenType::Heading ? nullptr : title_parser.parse_node();
+            if (!node) {
+                node = std::make_unique<TextNode>(std::string(title_parser.current().text));
+                title_parser.advance();
+            }
+            heading->content.push_back(std::move(node));
         }
+        for (auto &err: title_parser.errors_)
+            errors_.push_back(std::move(err));
     }
 
     // Calculate actual level: min of opening and closing
@@ -1044,8 +1072,10 @@ NodePtr Parser::parse_html_tag() {
     const Token &tok = current();
 
     tag->location.begin = tok.location.begin;
-    tag->tag_name = std::string(tok.tag_name);
-    tag->self_closing = tok.self_closing;
+    tag->tag_name = text::to_lower_ascii_copy(tok.tag_name);
+    // Void elements never have content, even when written without "/>"
+    static constexpr std::array<std::string_view, 6> void_tags = {"br", "col", "hr", "link", "meta", "wbr"};
+    tag->self_closing = tok.self_closing || std::ranges::find(void_tags, tag->tag_name) != void_tags.end();
 
     advance(); // skip opening tag
 

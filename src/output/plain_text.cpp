@@ -8,6 +8,7 @@
 #include <sstream>
 #include "wikilib/markup/ast.h"
 #include "wikilib/markup/parser.h"
+#include "wikilib/markup/tokenizer.h"
 
 namespace wikilib::output {
 
@@ -210,8 +211,8 @@ void PlainTextConverter::process_node(const markup::Node &node, std::string &out
                 add_paragraph_break(output);
                 process_children(node, output);
                 add_paragraph_break(output);
-            } else if (tag.tag_name == "ref" || tag.tag_name == "references") {
-                // Skip references
+            } else if (markup::is_extension_tag(tag.tag_name)) {
+                // Skip references, math, galleries and other non-text extensions
             } else {
                 // Include content of other tags
                 process_children(node, output);

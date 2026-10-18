@@ -83,6 +83,8 @@ namespace wikilib::markup {
             return "HtmlComment";
         case TokenType::NoWiki:
             return "NoWiki";
+        case TokenType::ExtensionTag:
+            return "ExtensionTag";
         case TokenType::HorizontalRule:
             return "HorizontalRule";
         case TokenType::MagicWord:
@@ -109,20 +111,66 @@ namespace wikilib::markup {
  * Based on tags from MediaWiki's Sanitizer.php and common HTML tags
  * used in wikis. Does not include "nowiki" which is handled specially.
  */
+// Tag names are matched case-insensitively (<BR>, <Ref>); longer names are not tags.
+static std::string_view lower_tag_name(std::string_view tag_name, std::array<char, 16> &buffer) noexcept {
+    if (tag_name.size() > buffer.size())
+        return {};
+    for (size_t i = 0; i < tag_name.size(); ++i)
+        buffer[i] = static_cast<char>(std::tolower(static_cast<unsigned char>(tag_name[i])));
+    return {buffer.data(), tag_name.size()};
+}
+
 static bool is_valid_html_tag(std::string_view tag_name) noexcept {
     // List of allowed HTML tags in MediaWiki (from TagFactory.h)
     // Sorted alphabetically for easier maintenance
-    static constexpr std::array<std::string_view, 63> valid_tags = {
+    static constexpr std::array<std::string_view, 64> valid_tags = {
         "abbr", "b", "bdi", "bdo", "big", "blockquote", "br", "caption", "center",
         "cite", "code", "col", "colgroup", "data", "dd", "del", "dfn", "div", "dl",
         "dt", "em", "font", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "i", "ins",
-        "kbd", "li", "link", "mark", "meta", "ol", "p", "pre", "q", "rb", "rp",
+        "kbd", "li", "link", "mark", "meta", "ol", "p", "poem", "pre", "q", "rb", "rp",
         "rt", "ruby", "s", "samp", "small", "span", "strike", "strong", "sub",
         "sup", "table", "td", "th", "time", "tr", "tt", "u", "ul", "var", "wbr"
     };
 
+    std::array<char, 16> buffer;
     // Binary search since array is sorted
-    return std::binary_search(valid_tags.begin(), valid_tags.end(), tag_name);
+    return std::binary_search(valid_tags.begin(), valid_tags.end(), lower_tag_name(tag_name, buffer));
+}
+
+bool is_extension_tag(std::string_view tag_name) noexcept {
+    // Extension tags whose content is not article text; sorted alphabetically
+    static constexpr std::array<std::string_view, 21> extension_tags = {
+        "categorytree", "ce", "chem", "gallery", "graph", "hiero", "imagemap",
+        "indicator", "inputbox", "mapframe", "maplink", "math", "ref", "references",
+        "score", "section", "source", "syntaxhighlight", "templatedata", "templatestyles",
+        "timeline"
+    };
+
+    std::array<char, 16> buffer;
+    return std::binary_search(extension_tags.begin(), extension_tags.end(), lower_tag_name(tag_name, buffer));
+}
+
+// Finds the closing </name> (case-insensitive, optional whitespace before '>')
+// at or after `from`; returns {begin, end} of the closing tag or npos.
+static std::pair<size_t, size_t> find_closing_tag(std::string_view input, std::string_view tag_name,
+                                                  size_t from) noexcept {
+    for (size_t pos = input.find("</", from); pos != std::string_view::npos; pos = input.find("</", pos + 2)) {
+        size_t p = pos + 2;
+        if (p + tag_name.size() > input.size())
+            break;
+        bool same = true;
+        for (size_t i = 0; i < tag_name.size() && same; ++i)
+            same = std::tolower(static_cast<unsigned char>(input[p + i])) ==
+                   std::tolower(static_cast<unsigned char>(tag_name[i]));
+        if (!same)
+            continue;
+        p += tag_name.size();
+        while (p < input.size() && (input[p] == ' ' || input[p] == '\t' || input[p] == '\n'))
+            ++p;
+        if (p < input.size() && input[p] == '>')
+            return {pos, p + 1};
+    }
+    return {std::string_view::npos, std::string_view::npos};
 }
 
 // ============================================================================
@@ -602,9 +650,11 @@ Token Tokenizer::scan_html_tag() {
     }
     std::string_view tag_name = input_.substr(name_start, pos_ - name_start);
 
+    const bool is_extension = is_extension_tag(tag_name);
+
     // Check if tag name is valid
     // If not, treat '<' as plain text and don't consume the rest
-    if (!is_valid_html_tag(tag_name)) {
+    if (!is_extension && !is_valid_html_tag(tag_name)) {
         // Reset position to just after '<'
         pos_ = begin + 1;
         current_pos_.column = start.column + 1;
@@ -631,6 +681,17 @@ Token Tokenizer::scan_html_tag() {
 
     Token tok;
     tok.type = is_closing ? TokenType::HtmlTagClose : TokenType::HtmlTagOpen;
+    if (is_extension && !is_closing) {
+        // Extension content is not wikitext to tokenize: take it raw up to
+        // the matching close tag. An unclosed tag has no content.
+        tok.type = TokenType::ExtensionTag;
+        if (!self_closing) {
+            const auto [close_begin, close_end] = find_closing_tag(input_, tag_name, pos_);
+            if (close_begin != std::string_view::npos) {
+                advance(close_end - pos_);
+            }
+        }
+    }
     tok.text = input_.substr(begin, pos_ - begin);
     tok.location = {start, current_pos_};
     tok.tag_name = tag_name;

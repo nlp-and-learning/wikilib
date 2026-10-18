@@ -68,6 +68,7 @@ enum class TokenType {
     HtmlTagClose, // </tag> or />
     HtmlComment, // <!-- ... -->
     NoWiki, // <nowiki>...</nowiki>
+    ExtensionTag, // <ref>...</ref>, <math>...</math>, etc. (content kept raw)
 
     // Special
     HorizontalRule, // ----
@@ -173,6 +174,21 @@ public:
     [[nodiscard]] SourcePosition position() const noexcept;
 
     /**
+     * @brief Get the input being tokenized (token locations are offsets into it)
+     */
+    [[nodiscard]] std::string_view input() const noexcept {
+        return input_;
+    }
+
+    /**
+     * @brief Tokenize the input as a continuation of a line (no lists,
+     * headings or tables at its start)
+     */
+    void start_mid_line() noexcept {
+        at_line_start_ = false;
+    }
+
+    /**
      * @brief Get any errors encountered
      */
     [[nodiscard]] const std::vector<ParseError> &errors() const noexcept;
@@ -227,6 +243,13 @@ private:
 // ============================================================================
 // Utility functions
 // ============================================================================
+
+/**
+ * @brief Check if a tag name is a MediaWiki extension tag whose content is
+ * not rendered as article text (ref, references, math, gallery, ...).
+ * Comparison is case-insensitive.
+ */
+[[nodiscard]] bool is_extension_tag(std::string_view tag_name) noexcept;
 
 /**
  * @brief Quick check if text looks like wikitext (has markup)
