@@ -101,6 +101,14 @@ TEST(TextUtilsTest, DecodeHtmlEntities) {
     EXPECT_EQ(text::decode_html_entities("&quot;hello&quot;"), "\"hello\"");
     EXPECT_EQ(text::decode_html_entities("&#60;"), "<");
     EXPECT_EQ(text::decode_html_entities("&#x3C;"), "<");
+    EXPECT_EQ(text::decode_html_entities("&ndash;&minus;&Prime;&shy;"), "–−″");
+    EXPECT_EQ(text::decode_html_entities("&#346;&#x2236;"), "Ś∶");
+}
+
+TEST(TextUtilsTest, DecodeHtmlEntitiesKeepsInvalid) {
+    EXPECT_EQ(text::decode_html_entities("&unknown; & x;"), "&unknown; & x;");
+    EXPECT_EQ(text::decode_html_entities("&#12ab; &#x; &#0; &#xD800; &#99999999;"),
+              "&#12ab; &#x; &#0; &#xD800; &#99999999;");
 }
 
 TEST(TextUtilsTest, SplitLines) {

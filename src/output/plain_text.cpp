@@ -6,6 +6,7 @@
 #include "wikilib/output/plain_text.h"
 #include <algorithm>
 #include <sstream>
+#include "wikilib/core/text_utils.hpp"
 #include "wikilib/markup/ast.h"
 #include "wikilib/markup/parser.h"
 #include "wikilib/markup/tokenizer.h"
@@ -22,6 +23,8 @@ PlainTextConverter::PlainTextConverter(PlainTextConfig config) : config_(std::mo
 std::string PlainTextConverter::convert(const markup::Node &node) {
     std::string output;
     process_node(node, output);
+    // Entities are decoded once, after markup is gone, so "&lt;ref&gt;" stays text
+    output = text::decode_html_entities(output);
 
     if (config_.collapse_whitespace) {
         // Normalize multiple spaces to single space

@@ -6,7 +6,10 @@
 #include "wikilib/core/text_utils.hpp"
 #include "wikilib/core/types.h"
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <cstdint>
+#include <optional>
 #include <sstream>
 
 namespace wikilib::text {
@@ -267,6 +270,51 @@ std::vector<size_t> find_all(std::string_view str, std::string_view substr) {
 // HTML entities
 // ============================================================================
 
+namespace {
+
+// Named entities common in wikitext; spaces map to ' ', invisible marks to "".
+// Sorted by name (ASCII order) for binary search.
+constexpr std::array<std::pair<std::string_view, std::string_view>, 52> kNamedEntities = {{
+    {"Prime", "″"},  {"amp", "&"},    {"apos", "'"},    {"asymp", "≈"},  {"bdquo", "„"},  {"bull", "•"},
+    {"copy", "©"},   {"deg", "°"},    {"divide", "÷"},  {"emsp", " "},   {"ensp", " "},   {"euro", "€"},
+    {"frac12", "½"}, {"frac14", "¼"}, {"frac34", "¾"},  {"frasl", "⁄"},  {"ge", "≥"},     {"gt", ">"},
+    {"hellip", "…"}, {"infin", "∞"},  {"laquo", "«"},   {"ldquo", "“"},  {"le", "≤"},     {"lrm", ""},
+    {"lsquo", "‘"},  {"lt", "<"},     {"mdash", "—"},   {"micro", "µ"},  {"middot", "·"}, {"minus", "−"},
+    {"nbsp", " "},   {"ndash", "–"},  {"ne", "≠"},      {"para", "¶"},   {"plusmn", "±"}, {"prime", "′"},
+    {"quot", "\""},  {"raquo", "»"},  {"rdquo", "”"},   {"reg", "®"},    {"rlm", ""},     {"rsquo", "’"},
+    {"sbquo", "‚"},  {"sect", "§"},   {"shy", ""},      {"sup2", "²"},   {"sup3", "³"},   {"thinsp", " "},
+    {"times", "×"},  {"trade", "™"},  {"zwj", ""},      {"zwnj", ""},
+}};
+static_assert(std::ranges::is_sorted(kNamedEntities, {}, &std::pair<std::string_view, std::string_view>::first));
+
+// Parses "#123" or "#x1F" into a code point; nullopt unless all digits are valid.
+std::optional<uint32_t> parse_numeric_entity(std::string_view entity) {
+    const bool hex = entity.size() > 1 && (entity[1] == 'x' || entity[1] == 'X');
+    const std::string_view digits = entity.substr(hex ? 2 : 1);
+    if (digits.empty())
+        return std::nullopt;
+    uint32_t codepoint = 0;
+    for (char c: digits) {
+        uint32_t digit;
+        if (c >= '0' && c <= '9')
+            digit = c - '0';
+        else if (hex && c >= 'a' && c <= 'f')
+            digit = c - 'a' + 10;
+        else if (hex && c >= 'A' && c <= 'F')
+            digit = c - 'A' + 10;
+        else
+            return std::nullopt;
+        codepoint = codepoint * (hex ? 16 : 10) + digit;
+        if (codepoint >= 0x110000)
+            return std::nullopt;
+    }
+    if (codepoint == 0 || (codepoint >= 0xD800 && codepoint <= 0xDFFF))
+        return std::nullopt;
+    return codepoint;
+}
+
+} // namespace
+
 std::string decode_html_entities(std::string_view str) {
     std::string result;
     result.reserve(str.size());
@@ -279,61 +327,19 @@ std::string decode_html_entities(std::string_view str) {
                 std::string_view entity = str.substr(i + 1, end - i - 1);
 
                 // Named entities
-                if (entity == "amp") {
-                    result += '&';
-                    i = end + 1;
-                    continue;
-                }
-                if (entity == "lt") {
-                    result += '<';
-                    i = end + 1;
-                    continue;
-                }
-                if (entity == "gt") {
-                    result += '>';
-                    i = end + 1;
-                    continue;
-                }
-                if (entity == "quot") {
-                    result += '"';
-                    i = end + 1;
-                    continue;
-                }
-                if (entity == "apos") {
-                    result += '\'';
-                    i = end + 1;
-                    continue;
-                }
-                if (entity == "nbsp") {
-                    result += ' ';
+                const auto named = std::ranges::lower_bound(kNamedEntities, entity, {},
+                                                            &std::pair<std::string_view, std::string_view>::first);
+                if (named != kNamedEntities.end() && named->first == entity) {
+                    result += named->second;
                     i = end + 1;
                     continue;
                 }
 
                 // Numeric entities
                 if (entity.size() > 1 && entity[0] == '#') {
-                    int codepoint = 0;
-                    if (entity[1] == 'x' || entity[1] == 'X') {
-                        // Hex
-                        for (size_t j = 2; j < entity.size(); ++j) {
-                            char c = entity[j];
-                            if (c >= '0' && c <= '9')
-                                codepoint = codepoint * 16 + (c - '0');
-                            else if (c >= 'a' && c <= 'f')
-                                codepoint = codepoint * 16 + (c - 'a' + 10);
-                            else if (c >= 'A' && c <= 'F')
-                                codepoint = codepoint * 16 + (c - 'A' + 10);
-                        }
-                    } else {
-                        // Decimal
-                        for (size_t j = 1; j < entity.size(); ++j) {
-                            char c = entity[j];
-                            if (c >= '0' && c <= '9')
-                                codepoint = codepoint * 10 + (c - '0');
-                        }
-                    }
-
-                    if (codepoint > 0 && codepoint < 0x110000) {
+                    const auto parsed = parse_numeric_entity(entity);
+                    if (parsed) {
+                        const uint32_t codepoint = *parsed;
                         // Encode as UTF-8
                         if (codepoint < 0x80) {
                             result += static_cast<char>(codepoint);

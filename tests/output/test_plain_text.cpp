@@ -48,6 +48,11 @@ TEST(PlainTextTest, HeadingStartingWithListMarker) {
     EXPECT_EQ(to_plain_text("==*Gwiazdka==\nTekst"), "*Gwiazdka\nTekst");
 }
 
+TEST(PlainTextTest, DecodesEntities) {
+    EXPECT_EQ(to_plain_text("10&nbsp;km &ndash; o&nbsp;&nbsp;tym"), "10 km – o tym");
+    EXPECT_EQ(to_plain_text("A&#124;B &#x2236; &lt;font&gt; &amp;lt;"), "A|B ∶ <font> &lt;");
+}
+
 TEST(PlainTextTest, ExtensionTagNames) {
     EXPECT_TRUE(markup::is_extension_tag("ref"));
     EXPECT_TRUE(markup::is_extension_tag("REFERENCES"));
